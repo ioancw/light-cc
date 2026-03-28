@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Light CC — Sign In</title>
+<style>
+  :root {
+    --bg: #0a0a0f;
+    --surface: #12121a;
+    --surface2: #1a1a26;
+    --border: #1e1e2e;
+    --border2: #2a2a3e;
+    --fg: #e2e2e8;
+    --fg-dim: #9898aa;
+    --muted: #5a5a6e;
+    --accent: #6366f1;
+    --accent-hover: #818cf8;
+    --red: #ef4444;
+    --green: #22c55e;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+  }
+
+  .auth-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 40px;
+    width: 100%;
+    max-width: 400px;
+  }
+
+  .auth-logo {
+    text-align: center;
+    margin-bottom: 32px;
+  }
+  .auth-logo h1 {
+    font-size: 22px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+  }
+  .auth-logo p {
+    color: var(--fg-dim);
+    font-size: 13px;
+    margin-top: 6px;
+  }
+
+  .tabs {
+    display: flex;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 24px;
+  }
+  .tab {
+    flex: 1;
+    padding: 10px;
+    text-align: center;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--muted);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: all 0.2s;
+  }
+  .tab.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+  }
+
+  .form-group {
+    margin-bottom: 16px;
+  }
+  .form-group label {
+    display: block;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--fg-dim);
+    margin-bottom: 6px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  .form-group input {
+    width: 100%;
+    padding: 10px 12px;
+    background: var(--surface2);
+    border: 1px solid var(--border2);
+    border-radius: 6px;
+    color: var(--fg);
+    font-size: 14px;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  .form-group input:focus {
+    border-color: var(--accent);
+  }
+
+  .submit-btn {
+    width: 100%;
+    padding: 11px;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    margin-top: 8px;
+    transition: background 0.2s;
+  }
+  .submit-btn:hover { background: var(--accent-hover); }
+  .submit-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .error-msg {
+    color: var(--red);
+    font-size: 12px;
+    margin-top: 12px;
+    text-align: center;
+    min-height: 18px;
+  }
+
+  #register-form { display: none; }
+</style>
+</head>
+<body>
+
+<div class="auth-card">
+  <div class="auth-logo">
+    <h1>&#9670; Light CC</h1>
+    <p>AI-powered workspace</p>
+  </div>
+
+  <div class="tabs">
+    <div class="tab active" data-tab="login">Sign In</div>
+    <div class="tab" data-tab="register">Register</div>
+  </div>
+
+  <form id="login-form">
+    <div class="form-group">
+      <label>Email</label>
+      <input type="email" id="login-email" required autocomplete="email">
+    </div>
+    <div class="form-group">
+      <label>Password</label>
+      <input type="password" id="login-password" required autocomplete="current-password">
+    </div>
+    <button type="submit" class="submit-btn">Sign In</button>
+    <div class="error-msg" id="login-error"></div>
+  </form>
+
+  <form id="register-form">
+    <div class="form-group">
+      <label>Display Name</label>
+      <input type="text" id="reg-name" required autocomplete="name">
+    </div>
+    <div class="form-group">
+      <label>Email</label>
+      <input type="email" id="reg-email" required autocomplete="email">
+    </div>
+    <div class="form-group">
+      <label>Password</label>
+      <input type="password" id="reg-password" required minlength="6" autocomplete="new-password">
+    </div>
+    <button type="submit" class="submit-btn">Create Account</button>
+    <div class="error-msg" id="reg-error"></div>
+  </form>
+</div>
+
+<script>
+const API = window.location.origin + '/api/auth';
+
+// Tab switching
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    const which = tab.dataset.tab;
+    document.getElementById('login-form').style.display = which === 'login' ? 'block' : 'none';
+    document.getElementById('register-form').style.display = which === 'register' ? 'block' : 'none';
+  });
+});
+
+function saveAuth(data) {
+  localStorage.setItem('lcc_access_token', data.access_token);
+  localStorage.setItem('lcc_refresh_token', data.refresh_token);
+  localStorage.setItem('lcc_user', JSON.stringify(data.user));
+  window.location.href = '/';
+}
+
+document.getElementById('login-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const errEl = document.getElementById('login-error');
+  errEl.textContent = '';
+  const btn = e.target.querySelector('.submit-btn');
+  btn.disabled = true;
+
+  try {
+    const resp = await fetch(`${API}/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: document.getElementById('login-email').value,
+        password: document.getElementById('login-password').value,
+      }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      errEl.textContent = data.detail || 'Login failed';
+      return;
+    }
+    saveAuth(data);
+  } catch (err) {
+    errEl.textContent = 'Network error';
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+document.getElementById('register-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const errEl = document.getElementById('reg-error');
+  errEl.textContent = '';
+  const btn = e.target.querySelector('.submit-btn');
+  btn.disabled = true;
+
+  try {
+    const resp = await fetch(`${API}/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        display_name: document.getElementById('reg-name').value,
+        email: document.getElementById('reg-email').value,
+        password: document.getElementById('reg-password').value,
+      }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      errEl.textContent = data.detail || 'Registration failed';
+      return;
+    }
+    saveAuth(data);
+  } catch (err) {
+    errEl.textContent = 'Network error';
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// If already logged in, go to main app
+if (localStorage.getItem('lcc_access_token')) {
+  window.location.href = '/';
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,27 @@
+model: claude-sonnet-4-6
+max_tokens: 4096
+max_context_tokens: 180000
+max_turns: 50
+compression_threshold: 0.8
+
+# Python executable for python_exec tool (null = auto-detect via sys.executable)
+python_path: null
+
+paths:
+  skills_dirs:
+    - skills
+    - ~/.claude/commands
+  data_dir: data
+  memory_dir: data/users
+
+server:
+  host: 0.0.0.0
+  port: 8000
+
+# Database (SQLite for dev, PostgreSQL for prod)
+database_url: "sqlite+aiosqlite:///data/lightcc.db"
+
+auth:
+  registration_enabled: true
+  jwt_expiry_hours: 1
+  jwt_refresh_expiry_days: 7

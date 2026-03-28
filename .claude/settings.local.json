@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find /c/Users/ioanc/github -maxdepth 2 -name *.md -o -name *.py)",
+      "Bash(find C:/Users/ioanc -maxdepth 4 -path */.claude/commands* -type d)",
+      "Bash(pip show:*)",
+      "Bash(find C:/Users/ioanc/github -maxdepth 4 -name *.md -path *commands*)",
+      "Bash(python -c \"import anthropic; help\\(anthropic.Anthropic.messages\\)\")",
+      "Bash(python:*)",
+      "Bash(find \"C:\\\\Users\\\\ioanc\\\\github\\\\light_cc\\\\core\" -name \"*.py\" -exec wc -l {} +)",
+      "Bash(find \"C:\\\\Users\\\\ioanc\\\\github\\\\light_cc\\\\tools\" -name \"*.py\" -exec wc -l {} +)",
+      "Bash(grep -h 'register_tool' /c/Users/ioanc/github/light_cc/tools/*.py)",
+      "Bash(for f:*)",
+      "Bash(do grep:*)",
+      "Bash(done)",
+      "WebSearch",
+      "WebFetch(domain:www.anthropic.com)",
+      "WebFetch(domain:claude.com)",
+      "WebFetch(domain:support.claude.com)",
+      "WebFetch(domain:claudecn.com)",
+      "Bash(curl:*)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(ls:*)"
+    ]
+  }
+}

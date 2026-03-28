@@ -1,0 +1,8 @@
+.env
+data/
+__pycache__/
+*.pyc
+.venv/
+.chainlit/.langchain.db
+.chainlit/chat_files/
+.chainlit/translations/
