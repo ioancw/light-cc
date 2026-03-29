@@ -13,6 +13,11 @@ logger = logging.getLogger(__name__)
 _SKILLS: dict[str, SkillDef] = {}
 
 
+def register_skill(skill: SkillDef) -> None:
+    """Register a single skill definition."""
+    _SKILLS[skill.name] = skill
+
+
 def load_skills(skills_dir: str | Path) -> None:
     """Discover and register skills from a directory. Accumulates across calls."""
     skills = discover_skills(skills_dir)
@@ -29,11 +34,21 @@ def get_skill(name: str) -> SkillDef | None:
 def match_skill_by_name(name: str) -> SkillDef | None:
     """Match a skill by explicit /name invocation.
 
+    Supports both exact names and namespaced names (plugin-name:skill-name).
     Only returns skills that are user-invocable.
     """
+    # Exact match first (handles both plain and namespaced names)
     skill = _SKILLS.get(name)
     if skill and skill.user_invocable:
         return skill
+
+    # If no colon in the query, try matching the suffix of namespaced skills
+    if ":" not in name:
+        for skill_name, skill in _SKILLS.items():
+            if ":" in skill_name and skill_name.split(":", 1)[1] == name:
+                if skill.user_invocable:
+                    return skill
+
     return None
 
 

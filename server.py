@@ -1,4 +1,4 @@
-"""FastAPI + WebSocket server for Light CC — replaces Chainlit.
+"""FastAPI + WebSocket server for Light CC.
 
 Run with: uvicorn server:app --host 0.0.0.0 --port 8000 --reload
 """
@@ -32,6 +32,7 @@ from core.rate_limit import check_rate_limit
 from core.session import (
     create_session,
     destroy_session_async,
+    fork_conversation,
     load_conversation,
     save_conversation,
     session_get,
@@ -46,9 +47,13 @@ from routes.admin import router as admin_router
 from routes.files import router as files_router
 from routes.usage import router as usage_router
 from commands.registry import get_command, list_commands, load_commands
+from core.project_config import load_project_config
+from core.rules import load_rules, get_active_rules
 from skills.registry import list_skills, load_skills, match_skill_by_intent, match_skill_by_name
 from tools.registry import get_all_tool_schemas, get_tool_schemas
 
+from core.hooks import load_hooks, fire_hooks, has_hooks
+from core.models import resolve_dynamic_content
 import tools  # noqa: F401 — triggers tool registration
 
 logger = logging.getLogger(__name__)
@@ -77,8 +82,9 @@ _python_info = _sys.executable
 _outputs_dir = _PROJECT_ROOT / "data" / "outputs"
 _outputs_dir.mkdir(parents=True, exist_ok=True)
 
-BASE_SYSTEM_PROMPT = f"""You are Light CC, a helpful AI assistant with tools for data processing, \
-visualization, and general tasks.
+BASE_SYSTEM_PROMPT = f"""You are Light CC, a helpful AI assistant with access to the local machine. \
+You can execute shell commands, run Python scripts, read/write files, and perform data processing, \
+visualization, and general tasks. You have real access to the file system — use your tools.
 
 Environment: {_os_info} | Python: {_python_info}
 Output directory: {_outputs_dir} (always use this for saving generated files)
@@ -110,8 +116,14 @@ def _build_system_prompt(
     skill_prompt: str | None = None,
     memory_context: str | None = None,
     user_system_prompt: str | None = None,
+    project_config: str | None = None,
+    rules_text: str | None = None,
 ) -> str:
     parts = [BASE_SYSTEM_PROMPT]
+    if project_config:
+        parts.append(f"\n## Project Instructions\n{project_config}")
+    if rules_text:
+        parts.append(f"\n## Project Rules\n{rules_text}")
     if user_system_prompt:
         parts.append(f"\n## User Instructions\n{user_system_prompt}")
     if skill_prompt:
@@ -121,13 +133,15 @@ def _build_system_prompt(
             f"\n## Your Memory\nThe following are things you remember about this user:\n{memory_context}"
         )
     # List available skills (user-invocable and auto-activated)
+    # Skills with disable_model_invocation=True are hidden from Claude's context
+    # entirely — they remain callable via /name but Claude won't see them.
     skills = list_skills()
-    user_invocable = [s for s in skills if s.user_invocable]
+    visible_skills = [s for s in skills if s.user_invocable and not s.disable_model_invocation]
     auto_activated = [s for s in skills if not s.disable_model_invocation]
 
-    if user_invocable:
+    if visible_skills:
         lines = []
-        for s in user_invocable:
+        for s in visible_skills:
             hint = f" {s.argument_hint}" if s.argument_hint else ""
             lines.append(f"- /{s.name}{hint}: {s.description}")
         parts.append(f"\n## Available Skills\nUsers can invoke these with /name:\n" + "\n".join(lines))
@@ -166,6 +180,7 @@ async def startup():
     await init_db()
     await init_redis()
     await init_job_queue()
+    load_hooks(settings.hooks)
 
     # Load plugins from configured directories
     from core.plugin_loader import get_plugin_loader
@@ -257,6 +272,161 @@ _MIME_MAP = {
     ".svg": "image/svg+xml",
     ".webp": "image/webp",
 }
+
+
+def _rebuild_render_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Rebuild frontend-renderable messages from stored API messages.
+
+    Extracts text, tool_use, and tool_result blocks so the frontend can
+    reconstruct tool call panels with images/charts.
+    """
+    # First pass: collect tool_result by tool_use_id
+    tool_results: dict[str, dict[str, Any]] = {}
+    for msg in messages:
+        content = msg.get("content", "")
+        if msg.get("role") == "user" and isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "tool_result":
+                    tid = block.get("tool_use_id")
+                    if tid:
+                        tool_results[tid] = block
+
+    # Second pass: build render messages
+    render_messages: list[dict[str, Any]] = []
+    for msg in messages:
+        try:
+            content = msg.get("content", "")
+
+            if msg["role"] == "user":
+                if isinstance(content, str):
+                    render_messages.append({"role": "user", "content": content})
+                # Skip user messages that are just tool_result arrays
+                elif isinstance(content, list):
+                    text_parts = [b.get("text", "") for b in content
+                                  if isinstance(b, dict) and b.get("type") == "text"]
+                    if text_parts:
+                        render_messages.append({"role": "user", "content": "\n".join(text_parts)})
+
+            elif msg["role"] == "assistant":
+                if isinstance(content, str):
+                    render_messages.append({"role": "assistant", "content": content})
+                elif isinstance(content, list):
+                    text_parts = []
+                    tool_calls = []
+                    for block in content:
+                        if not isinstance(block, dict):
+                            continue
+                        if block.get("type") == "text":
+                            text_parts.append(block.get("text", ""))
+                        elif block.get("type") == "tool_use":
+                            tc_id = block.get("id", "")
+                            tc: dict[str, Any] = {
+                                "id": tc_id,
+                                "name": block.get("name", "tool"),
+                                "input": block.get("input", {}),
+                                "status": "done",
+                            }
+                            # Pair with result
+                            tr = tool_results.get(tc_id)
+                            if tr:
+                                result_content = tr.get("content", "")
+                                tc["result"] = result_content
+                                tc["is_error"] = tr.get("is_error", False)
+                                if tc["is_error"]:
+                                    tc["status"] = "error"
+                                # Detect images from file paths in stdout
+                                try:
+                                    tc["images"] = _extract_images_from_result(result_content)
+                                except Exception:
+                                    tc["images"] = []
+                                # Detect Plotly charts
+                                try:
+                                    chart = _extract_chart_from_result(result_content)
+                                    if chart:
+                                        tc["chart"] = chart
+                                except Exception:
+                                    pass
+                            tool_calls.append(tc)
+
+                    rm: dict[str, Any] = {
+                        "role": "assistant",
+                        "content": "\n".join(text_parts) if text_parts else "",
+                    }
+                    if tool_calls:
+                        rm["toolCalls"] = tool_calls
+                    render_messages.append(rm)
+        except Exception as e:
+            logger.warning(f"Skipping malformed message during rebuild: {e}")
+            # Still include the message as plain text if possible
+            try:
+                content = msg.get("content", "")
+                if isinstance(content, str) and content:
+                    render_messages.append({"role": msg.get("role", "assistant"), "content": content})
+            except Exception:
+                pass
+
+    return render_messages
+
+
+def _extract_images_from_result(result) -> list[dict[str, str]]:
+    """Extract base64-encoded images from file paths found in tool result stdout."""
+    images = []
+    try:
+        # Handle list content blocks (API format)
+        if isinstance(result, list):
+            text_parts = [b.get("text", "") for b in result if isinstance(b, dict) and b.get("type") == "text"]
+            result = "\n".join(text_parts)
+        parsed = json.loads(result) if isinstance(result, str) else result
+        stdout = parsed.get("stdout", "") if isinstance(parsed, dict) else (result if isinstance(result, str) else "")
+    except (json.JSONDecodeError, TypeError, AttributeError):
+        return images
+
+    if not stdout:
+        return images
+
+    for line in stdout.strip().splitlines():
+        line = line.strip()
+        try:
+            p = Path(line)
+            if not p.exists():
+                continue
+            ext = p.suffix.lower()
+            mime = _IMAGE_EXTENSIONS.get(ext)
+            if mime and p.stat().st_size < 10 * 1024 * 1024:
+                import base64
+                data = base64.b64encode(p.read_bytes()).decode("ascii")
+                images.append({"mime": mime, "data": data, "name": p.name})
+        except (OSError, ValueError):
+            continue
+    return images
+
+
+def _extract_chart_from_result(result) -> dict[str, str] | None:
+    """Extract Plotly chart JSON from file paths found in tool result stdout."""
+    try:
+        # Handle list content blocks (API format)
+        if isinstance(result, list):
+            text_parts = [b.get("text", "") for b in result if isinstance(b, dict) and b.get("type") == "text"]
+            result = "\n".join(text_parts)
+        parsed = json.loads(result) if isinstance(result, str) else result
+        stdout = parsed.get("stdout", "") if isinstance(parsed, dict) else (result if isinstance(result, str) else "")
+    except (json.JSONDecodeError, TypeError, AttributeError):
+        return None
+
+    if not stdout:
+        return None
+
+    for line in stdout.strip().splitlines():
+        line = line.strip()
+        try:
+            p = Path(line)
+            if p.exists() and p.name.endswith(".plotly.json"):
+                chart_json = p.read_text(encoding="utf-8")
+                json.loads(chart_json)  # validate
+                return {"title": p.stem.replace(".plotly", ""), "plotlyJson": chart_json}
+        except (json.JSONDecodeError, OSError, ValueError):
+            pass
+    return None
 
 
 async def _send_images_if_any(
@@ -426,6 +596,10 @@ async def websocket_endpoint(ws: WebSocket):
     session = create_session(session_id, user_id=user_id)
     session_opened()
 
+    # Fire SessionStart hooks
+    if has_hooks("SessionStart"):
+        await fire_hooks("SessionStart", {"session_id": session_id, "user_id": user_id})
+
     # Pending permission futures: request_id -> Future[bool]
     pending_permissions: dict[str, asyncio.Future] = {}
 
@@ -451,11 +625,19 @@ async def websocket_endpoint(ws: WebSocket):
     set_notification_callback(bg_notify)
     set_task_notify_callback(task_notify)
 
-    # Send connected event with user info
+    # Send connected event with user info + available skills/commands
+    skills_for_client = [
+        {"name": s.name, "description": s.description, "argument_hint": s.argument_hint}
+        for s in list_skills() if s.user_invocable
+    ] + [
+        {"name": c.name, "description": c.description, "argument_hint": c.argument_hint}
+        for c in list_commands()
+    ]
     await send_event("connected", {
         "session_id": session_id,
         "model": settings.model,
         "available_models": settings.available_models,
+        "skills": skills_for_client,
         "user": {
             "id": user_id,
             "email": user_email,
@@ -489,6 +671,10 @@ async def websocket_endpoint(ws: WebSocket):
                 if future and not future.done():
                     future.set_result(data.get("allowed", False))
 
+            elif event_type == "cancel_generation":
+                if agent_task and not agent_task.done():
+                    agent_task.cancel()
+
             elif event_type == "clear_conversation":
                 # Save current conversation before clearing
                 await save_conversation(session_id)
@@ -498,50 +684,130 @@ async def websocket_endpoint(ws: WebSocket):
             elif event_type == "resume_conversation":
                 conv_id = data.get("conversation_id", "")
                 if conv_id:
-                    messages = await load_conversation(conv_id)
-                    session_set(session_id, "messages", messages)
-                    session_set(session_id, "conversation_id", conv_id)
-                    # Restore conversation model
-                    from core.db_models import Conversation
-                    from sqlalchemy import select
-                    db = await get_db()
                     try:
-                        result = await db.execute(
-                            select(Conversation.model).where(Conversation.id == conv_id)
-                        )
-                        conv_model = result.scalar_one_or_none()
-                        if conv_model:
-                            session_set(session_id, "active_model", conv_model)
-                    finally:
-                        await db.close()
-                    # Build renderable messages for the frontend
-                    render_messages = []
-                    for msg in messages:
-                        content = msg.get("content", "")
-                        if isinstance(content, str):
-                            render_messages.append({"role": msg["role"], "content": content})
-                        elif isinstance(content, list):
-                            # Extract text and tool_use/tool_result blocks
-                            text_parts = []
-                            for block in content:
-                                if isinstance(block, dict):
-                                    if block.get("type") == "text":
-                                        text_parts.append(block["text"])
-                                    elif block.get("type") == "tool_result":
-                                        # Skip tool results in rendering
-                                        pass
-                            if text_parts:
-                                render_messages.append({"role": msg["role"], "content": "\n".join(text_parts)})
+                        messages = await load_conversation(conv_id)
+                        session_set(session_id, "messages", messages)
+                        session_set(session_id, "conversation_id", conv_id)
+                        # Restore conversation model
+                        from core.db_models import Conversation
+                        from sqlalchemy import select
+                        db = await get_db()
+                        try:
+                            result = await db.execute(
+                                select(Conversation.model).where(Conversation.id == conv_id)
+                            )
+                            conv_model = result.scalar_one_or_none()
+                            if conv_model:
+                                session_set(session_id, "active_model", conv_model)
+                        finally:
+                            await db.close()
+                        # Build renderable messages with tool calls for the frontend
+                        render_messages = _rebuild_render_messages(messages)
 
-                    await send_event("conversation_loaded", {
-                        "conversation_id": conv_id,
-                        "message_count": len(messages),
-                        "model": conv_model or settings.model,
-                        "messages": render_messages,
-                    })
+                        await send_event("conversation_loaded", {
+                            "conversation_id": conv_id,
+                            "message_count": len(messages),
+                            "model": conv_model or settings.model,
+                            "messages": render_messages,
+                        })
+                    except Exception as e:
+                        logger.error(f"Failed to load conversation {conv_id}: {e}", exc_info=True)
+                        await send_event("error", {"message": f"Failed to load conversation: {e}"})
+
+            elif event_type == "revert_checkpoint":
+                from core.checkpoints import revert_last, revert_to_turn, list_checkpoints
+                turn = data.get("turn")
+                if turn is not None:
+                    reverted = revert_to_turn(session_id, int(turn))
+                else:
+                    reverted = revert_last(session_id)
+                await send_event("checkpoint_reverted", {
+                    "reverted_files": reverted,
+                    "remaining": len(list_checkpoints(session_id)),
+                })
+
+            elif event_type == "list_checkpoints":
+                from core.checkpoints import list_checkpoints
+                cps = list_checkpoints(session_id)
+                await send_event("checkpoints", {
+                    "entries": [
+                        {"file_path": cp.file_path, "turn": cp.turn, "size": cp.size, "existed": cp.existed}
+                        for cp in cps
+                    ],
+                })
+
+            elif event_type == "fork_conversation":
+                conv_id = data.get("conversation_id", "")
+                if conv_id:
+                    try:
+                        new_conv_id, messages = await fork_conversation(conv_id, user_id)
+                        session_set(session_id, "messages", messages)
+                        session_set(session_id, "conversation_id", new_conv_id)
+                        await send_event("conversation_forked", {
+                            "source_conversation_id": conv_id,
+                            "conversation_id": new_conv_id,
+                            "message_count": len(messages),
+                        })
+                    except ValueError as e:
+                        await send_event("error", {"message": str(e)})
 
             elif event_type == "set_system_prompt":
                 session_set(session_id, "user_system_prompt", data.get("text", ""))
+
+            elif event_type == "set_permission_mode":
+                from core.permission_modes import PermissionMode
+                mode_str = data.get("mode", "")
+                try:
+                    mode = PermissionMode(mode_str)
+                    session_set(session_id, "permission_mode", mode.value)
+                    await send_event("permission_mode_changed", {"mode": mode.value})
+                except ValueError:
+                    await send_event("error", {"message": f"Unknown permission mode: {mode_str}"})
+
+            elif event_type == "cycle_permission_mode":
+                from core.permission_modes import PermissionMode
+                current = PermissionMode(session_get(session_id, "permission_mode") or "default")
+                new_mode = current.next()
+                session_set(session_id, "permission_mode", new_mode.value)
+                await send_event("permission_mode_changed", {"mode": new_mode.value})
+
+            elif event_type == "generate_title":
+                conv_id = session_get(session_id, "conversation_id")
+                msgs = session_get(session_id, "messages") or []
+                if msgs and len(msgs) >= 2:
+                    title = await _generate_title(msgs[:4])
+                    if title and conv_id:
+                        from core.db_models import Conversation
+                        from sqlalchemy import update as sql_update
+                        db = await get_db()
+                        try:
+                            await db.execute(
+                                sql_update(Conversation).where(Conversation.id == conv_id).values(title=title)
+                            )
+                            await db.commit()
+                        finally:
+                            await db.close()
+                    await send_event("title_updated", {"conversation_id": conv_id or "", "title": title or ""})
+
+            elif event_type == "summarize_context":
+                msgs = session_get(session_id, "messages") or []
+                if len(msgs) < 6:
+                    await send_event("error", {"message": "Not enough messages to summarize"})
+                else:
+                    try:
+                        summary = await _summarize_messages(msgs)
+                        # Replace old messages with summary + recent messages
+                        recent = msgs[-4:]  # keep last 2 exchanges
+                        new_msgs = [{"role": "user", "content": f"[Previous conversation summary: {summary}]"}] + recent
+                        session_set(session_id, "messages", new_msgs)
+                        await send_event("context_summarized", {
+                            "original_count": len(msgs),
+                            "new_count": len(new_msgs),
+                            "summary": summary,
+                        })
+                    except Exception as e:
+                        logger.error(f"Context summarization failed: {e}", exc_info=True)
+                        await send_event("error", {"message": f"Summarization failed: {e}"})
 
             elif event_type == "set_model":
                 model_id = data.get("model", "")
@@ -564,8 +830,79 @@ async def websocket_endpoint(ws: WebSocket):
             logger.error("Failed to save conversation on disconnect", exc_info=True)
         if agent_task and not agent_task.done():
             agent_task.cancel()
+        # Fire SessionEnd hooks
+        if has_hooks("SessionEnd"):
+            try:
+                await fire_hooks("SessionEnd", {"session_id": session_id, "user_id": user_id})
+            except Exception:
+                pass
+        # Clean up checkpoints
+        from core.checkpoints import clear_checkpoints
+        clear_checkpoints(session_id)
         await destroy_session_async(session_id)
         session_closed()
+
+
+async def _generate_title(messages: list[dict[str, Any]]) -> str:
+    """Generate a short conversation title from the first few messages."""
+    from core.client import get_client
+    client = get_client()
+    text_parts = []
+    for m in messages[:4]:
+        content = m.get("content", "")
+        if isinstance(content, list):
+            content = " ".join(
+                b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"
+            )
+        if isinstance(content, str):
+            text_parts.append(f"{m.get('role', 'unknown')}: {content[:200]}")
+    prompt = (
+        "Summarize this conversation in 4-6 words for a sidebar title. "
+        "Return only the title, no quotes or punctuation.\n\n"
+        + "\n".join(text_parts)
+    )
+    try:
+        resp = await client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=30,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return resp.content[0].text.strip()
+    except Exception as e:
+        logger.warning(f"Title generation failed: {e}")
+        return ""
+
+
+async def _summarize_messages(messages: list[dict[str, Any]]) -> str:
+    """Summarize older messages to reduce context size."""
+    from core.client import get_client
+    client = get_client()
+
+    # Extract text from messages to summarize (all except the last 4)
+    to_summarize = messages[:-4]
+    text_parts = []
+    for m in to_summarize:
+        content = m.get("content", "")
+        if isinstance(content, list):
+            content = " ".join(
+                b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"
+            )
+        if isinstance(content, str) and content.strip():
+            role = m.get("role", "unknown")
+            text_parts.append(f"{role}: {content[:500]}")
+
+    combined = "\n".join(text_parts)[:8000]
+    prompt = (
+        "Summarize this conversation history concisely, preserving key facts, "
+        "decisions, code snippets mentioned, and context needed to continue the conversation. "
+        "Be thorough but compact.\n\n" + combined
+    )
+    resp = await client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=1000,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return resp.content[0].text.strip()
 
 
 async def _handle_user_message(
@@ -581,10 +918,31 @@ async def _handle_user_message(
     ensure_user_dirs(user_id)
 
     messages = session_get(session_id, "messages") or []
+
+    # Fire PromptSubmit hooks
+    if has_hooks("PromptSubmit"):
+        await fire_hooks("PromptSubmit", {"text": data["text"], "user_id": user_id})
+
     messages.append({"role": "user", "content": data["text"]})
 
     memory_context = load_memory(user_id)
     user_system_prompt = session_get(session_id, "user_system_prompt") or ""
+
+    # Load project config (CLAUDE.md) and rules — cached per session
+    project_config = session_get(session_id, "project_config")
+    if project_config is None:
+        project_dir = Path(settings.project_dir) if settings.project_dir else Path.cwd()
+        project_config = load_project_config(project_dir)
+        session_set(session_id, "project_config", project_config)
+    project_rules = session_get(session_id, "project_rules")
+    if project_rules is None:
+        project_dir = Path(settings.project_dir) if settings.project_dir else Path.cwd()
+        project_rules = load_rules(project_dir)
+        session_set(session_id, "project_rules", project_rules)
+
+    # Compute active rules based on files touched so far
+    active_files: list[str] = session_get(session_id, "active_files") or []
+    rules_text = get_active_rules(project_rules, active_files) if project_rules else ""
 
     # Set per-user output directory in the system prompt
     if user_id != "default":
@@ -610,10 +968,35 @@ async def _handle_user_message(
         parts = msg_stripped.split(None, 1)
         args = parts[1] if len(parts) > 1 else ""
 
+        # Built-in: /context — show context window breakdown
+        if slash_name == "context":
+            from core.context import get_context_breakdown
+            breakdown = await get_context_breakdown(
+                messages, system="(pending)",
+                tools=tool_schemas,
+                project_config=session_get(session_id, "project_config") or "",
+                rules_text=get_active_rules(session_get(session_id, "project_rules") or [], session_get(session_id, "active_files") or []),
+                memory_context=load_memory(user_id),
+            )
+            lines = [
+                "**Context Window Usage**",
+                f"- System prompt: ~{breakdown['system_prompt_tokens']:,} tokens",
+                f"- Project config (CLAUDE.md): ~{breakdown['project_config_tokens']:,} tokens",
+                f"- Project rules: ~{breakdown['rules_tokens']:,} tokens",
+                f"- Memory: ~{breakdown['memory_tokens']:,} tokens",
+                f"- Skills: ~{breakdown['skill_tokens']:,} tokens",
+                f"- Tool schemas: ~{breakdown['tools_tokens']:,} tokens",
+                f"- Messages: ~{breakdown['messages_tokens']:,} tokens",
+                f"- **Total: ~{breakdown['total_tokens']:,} / {breakdown['max_tokens']:,} ({breakdown['usage_pct']}%)**",
+            ]
+            await send_event("text_delta", {"text": "\n".join(lines)})
+            await send_event("response_end", {})
+            return
+
         # 1. Try skill first (modern standard)
         matched_skill = match_skill_by_name(slash_name)
         if matched_skill:
-            active_prompt = matched_skill.resolve_arguments(args)
+            active_prompt = matched_skill.resolve_arguments(args, session_id=session_id)
         else:
             # 2. Check commands
             matched_command = get_command(slash_name)
@@ -646,10 +1029,37 @@ async def _handle_user_message(
             "type": "command",
         })
 
+    # Handle skill context=fork: run in isolated subagent instead of main loop
+    if matched_skill and matched_skill.context == "fork":
+        from tools.subagent import run_subagent
+        await send_event("text_delta", {"text": ""})  # signal response start
+        fork_system = active_prompt or matched_skill.prompt
+        fork_prompt = data["text"]
+        if msg_stripped.startswith("/"):
+            parts = msg_stripped.split(None, 1)
+            fork_prompt = parts[1] if len(parts) > 1 else matched_skill.description
+        result = await run_subagent(
+            prompt=fork_prompt,
+            system=fork_system,
+            tool_names=matched_skill.tools or None,
+        )
+        await send_event("text_delta", {"text": result})
+        await send_event("response_end", {})
+        messages.append({"role": "assistant", "content": [{"type": "text", "text": result}]})
+        session_set(session_id, "messages", messages)
+        await save_conversation(session_id)
+        return
+
+    # Resolve !`command` dynamic content in skill/command prompts
+    if active_prompt:
+        active_prompt = await resolve_dynamic_content(active_prompt)
+
     system = _build_system_prompt(
         active_prompt,
         memory_context or None,
         user_system_prompt or None,
+        project_config or None,
+        rules_text or None,
     )
 
     # ─── Agent callbacks ───
@@ -694,6 +1104,16 @@ async def _handle_user_message(
     async def on_tool_start_wrapper(name: str, tool_input: dict[str, Any]) -> str:
         tool_id = await on_tool_start(name, tool_input)
         _tool_names[tool_id] = name
+        # Track active files for path-scoped rules
+        _file_keys = ("file_path", "path", "pattern")
+        for key in _file_keys:
+            val = tool_input.get(key)
+            if val and isinstance(val, str):
+                af = session_get(session_id, "active_files") or []
+                if val not in af:
+                    af.append(val)
+                    session_set(session_id, "active_files", af)
+                break
         return tool_id
 
     async def on_tool_end_wrapper(tool_id: str, result: str) -> None:
@@ -703,28 +1123,36 @@ async def _handle_user_message(
         await _send_tables_if_any(tool_id, tool_name, result, send_event)
 
     async def on_permission_check(name: str, tool_input: dict[str, Any]) -> bool | str:
-        if is_blocked(name, tool_input):
-            return "BLOCKED: This command is not allowed for safety reasons."
-        if is_risky(name, tool_input):
-            req_id = f"perm_{uuid.uuid4().hex[:8]}"
-            future: asyncio.Future[bool] = asyncio.get_event_loop().create_future()
-            pending_permissions[req_id] = future
+        from core.permission_modes import PermissionMode, check_permission
 
-            await send_event("permission_request", {
-                "request_id": req_id,
-                "tool_name": name,
-                "summary": summarize_tool_call(name, tool_input),
-            })
+        mode_str = session_get(session_id, "permission_mode") or "default"
+        mode = PermissionMode(mode_str)
+        result = check_permission(mode, name, tool_input)
 
-            try:
-                allowed = await asyncio.wait_for(future, timeout=120.0)
-            except asyncio.TimeoutError:
-                return "Timed out waiting for user permission"
-            finally:
-                pending_permissions.pop(req_id, None)
+        if result is True:
+            return True
+        if isinstance(result, str):
+            return result
+        # result is None — ask the user
+        req_id = f"perm_{uuid.uuid4().hex[:8]}"
+        future: asyncio.Future[bool] = asyncio.get_event_loop().create_future()
+        pending_permissions[req_id] = future
 
-            return True if allowed else "User denied this action"
-        return True
+        await send_event("permission_request", {
+            "request_id": req_id,
+            "tool_name": name,
+            "summary": summarize_tool_call(name, tool_input),
+            "permission_mode": mode_str,
+        })
+
+        try:
+            allowed = await asyncio.wait_for(future, timeout=120.0)
+        except asyncio.TimeoutError:
+            return "Timed out waiting for user permission"
+        finally:
+            pending_permissions.pop(req_id, None)
+
+        return True if allowed else "User denied this action"
 
     # Get per-session model override
     active_model = session_get(session_id, "active_model") or None
@@ -755,6 +1183,10 @@ async def _handle_user_message(
             "conversation_id": conv_id,
             "usage": usage_data,
         })
+    except asyncio.CancelledError:
+        logger.info("Agent generation cancelled by user")
+        await save_conversation(session_id)
+        await send_event("generation_cancelled", {})
     except Exception as e:
         logger.error(f"Agent error: {e}", exc_info=True)
         await send_event("error", {"message": str(e)})

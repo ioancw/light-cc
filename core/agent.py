@@ -218,11 +218,39 @@ async def run(
                         "is_error": True,
                     }
 
+            # Fire PreToolUse hooks (non-zero exit blocks the tool)
+            from core.hooks import has_hooks, fire_hooks
+            if has_hooks("PreToolUse"):
+                hook_results = await fire_hooks(
+                    "PreToolUse",
+                    {"tool_name": call["name"], "tool_input": call["input"]},
+                    tool_name=call["name"],
+                )
+                for hr in hook_results:
+                    if hr.exit_code != 0:
+                        error_msg = hr.stdout or hr.stderr or "Blocked by PreToolUse hook"
+                        ctx = await on_tool_start(call["name"], call["input"])
+                        await on_tool_end(ctx, json.dumps({"error": error_msg}))
+                        return {
+                            "type": "tool_result",
+                            "tool_use_id": call["id"],
+                            "content": json.dumps({"error": error_msg}),
+                            "is_error": True,
+                        }
+
             ctx = await on_tool_start(call["name"], call["input"])
             _tool_t0 = time.monotonic()
             result = await execute_tool(call["name"], call["input"])
             record_tool_call(call["name"], time.monotonic() - _tool_t0)
             await on_tool_end(ctx, result)
+
+            # Fire PostToolUse hooks
+            if has_hooks("PostToolUse"):
+                await fire_hooks(
+                    "PostToolUse",
+                    {"tool_name": call["name"], "tool_input": call["input"], "result": result},
+                    tool_name=call["name"],
+                )
 
             # Detect error results and set is_error so Claude knows the tool failed
             is_error = False

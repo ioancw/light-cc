@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import re
+
 from pydantic import BaseModel
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from sqlalchemy import select, update, or_
 
 from core.database import get_db
@@ -153,6 +155,19 @@ async def update_conversation(
     return {"status": "ok"}
 
 
+@router.post("/{conversation_id}/fork")
+async def fork_conversation_endpoint(conversation_id: str, user: User = Depends(get_current_user)):
+    """Fork a conversation, creating a copy of all messages in a new conversation."""
+    from core.session import fork_conversation
+
+    try:
+        new_conv_id, messages = await fork_conversation(conversation_id, user.id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Conversation not found or empty")
+
+    return {"conversation_id": new_conv_id, "message_count": len(messages)}
+
+
 @router.delete("/{conversation_id}")
 async def delete_conversation(conversation_id: str, user: User = Depends(get_current_user)):
     db = await get_db()
@@ -176,4 +191,103 @@ async def delete_conversation(conversation_id: str, user: User = Depends(get_cur
     finally:
         await db.close()
 
-    return {"status": "ok"}
+    return {"status": "deleted"}
+
+
+def _parse_claude_markdown(text: str) -> tuple[str, list[dict[str, str]]]:
+    """Parse a Claude.ai markdown export into a title and message list.
+
+    Supports formats:
+      ## Human / ## Assistant
+      ## User / ## Assistant
+      **Human:** / **Assistant:**
+      ### You / ### Claude (newer export format)
+    """
+    lines = text.split("\n")
+    title = "Imported conversation"
+    messages: list[dict[str, str]] = []
+
+    # Extract title from first H1
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("# ") and not stripped.startswith("## "):
+            title = stripped[2:].strip()
+            break
+
+    # Split on role headers
+    role_pattern = re.compile(
+        r"^(?:#{2,3}\s+(?:Human|User|You)|#{2,3}\s+(?:Assistant|Claude)"
+        r"|\*\*(?:Human|User):\*\*|\*\*(?:Assistant|Claude):\*\*)\s*$",
+        re.IGNORECASE,
+    )
+
+    current_role: str | None = None
+    current_content: list[str] = []
+
+    for line in lines:
+        stripped = line.strip()
+        if role_pattern.match(stripped):
+            # Save previous block
+            if current_role and current_content:
+                content = "\n".join(current_content).strip()
+                if content:
+                    messages.append({"role": current_role, "content": content})
+            # Determine new role
+            lower = stripped.lower()
+            if "human" in lower or "user" in lower or "you" in lower:
+                current_role = "user"
+            else:
+                current_role = "assistant"
+            current_content = []
+        elif current_role is not None:
+            current_content.append(line)
+
+    # Don't forget the last block
+    if current_role and current_content:
+        content = "\n".join(current_content).strip()
+        if content:
+            messages.append({"role": current_role, "content": content})
+
+    return title, messages
+
+
+@router.post("/import")
+async def import_conversation(
+    file: UploadFile = File(...),
+    user: User = Depends(get_current_user),
+):
+    """Import a markdown conversation export (e.g. from Claude.ai)."""
+    content = await file.read()
+    text = content.decode("utf-8", errors="replace")
+
+    title, messages = _parse_claude_markdown(text)
+    if not messages:
+        # Not a conversation export — import as a single user message with the document content
+        # Extract title from first H1 or use filename
+        title_match = re.search(r"^#\s+(.+)$", text, re.MULTILINE)
+        title = title_match.group(1).strip() if title_match else (file.filename or "Imported document")
+        messages = [{"role": "user", "content": text.strip()}]
+
+    db = await get_db()
+    try:
+        conv = Conversation(user_id=user.id, title=title, model=None)
+        db.add(conv)
+        await db.flush()
+
+        for msg in messages:
+            db.add(Message(
+                conversation_id=conv.id,
+                role=msg["role"],
+                content=msg["content"],
+            ))
+
+        await db.commit()
+        conv_id = conv.id
+    finally:
+        await db.close()
+
+    return {
+        "conversation_id": conv_id,
+        "title": title,
+        "message_count": len(messages),
+    }

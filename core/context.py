@@ -125,6 +125,48 @@ async def compress_if_needed(
     return compressed
 
 
+async def get_context_breakdown(
+    messages: list[dict[str, Any]],
+    system: str,
+    tools: list[dict[str, Any]] | None = None,
+    *,
+    project_config: str = "",
+    rules_text: str = "",
+    memory_context: str = "",
+    skill_prompt: str = "",
+) -> dict[str, Any]:
+    """Return a token-count breakdown of each context component.
+
+    Useful for the ``/context`` command so users can see what is consuming
+    their context window.
+    """
+    max_tokens = settings.max_context_tokens
+
+    # Estimate individual component sizes
+    system_base_tokens = _estimate_tokens(system)
+    project_config_tokens = _estimate_tokens(project_config) if project_config else 0
+    rules_tokens = _estimate_tokens(rules_text) if rules_text else 0
+    memory_tokens = _estimate_tokens(memory_context) if memory_context else 0
+    skill_tokens = _estimate_tokens(skill_prompt) if skill_prompt else 0
+    tools_tokens = _estimate_tokens(json.dumps(tools)) if tools else 0
+    messages_tokens = _estimate_message_tokens(messages)
+
+    total = await count_message_tokens(messages, system, tools)
+
+    return {
+        "system_prompt_tokens": system_base_tokens,
+        "project_config_tokens": project_config_tokens,
+        "rules_tokens": rules_tokens,
+        "memory_tokens": memory_tokens,
+        "skill_tokens": skill_tokens,
+        "tools_tokens": tools_tokens,
+        "messages_tokens": messages_tokens,
+        "total_tokens": total,
+        "max_tokens": max_tokens,
+        "usage_pct": round(total / max_tokens * 100, 1) if max_tokens else 0,
+    }
+
+
 def _format_for_summary(messages: list[dict[str, Any]]) -> str:
     """Format messages into readable text for summarization."""
     parts: list[str] = []

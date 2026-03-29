@@ -14,7 +14,7 @@ from tools.registry import register_tool
 
 logger = logging.getLogger(__name__)
 
-# Default data root — overridden by config in app.py
+# Default data root — overridden by config
 _DATA_ROOT = Path(__file__).resolve().parent.parent / "data" / "users"
 
 # Context-var for async-safe per-request user identity (replaces global)

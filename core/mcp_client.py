@@ -138,6 +138,20 @@ class MCPManager:
             schemas.extend(conn.tools)
         return schemas
 
+    def search_tools(self, query: str, max_results: int = 5) -> list[dict[str, Any]]:
+        """Search MCP tool names/descriptions by keyword. Returns matching schemas."""
+        query_lower = query.lower()
+        keywords = query_lower.split()
+        scored: list[tuple[int, dict[str, Any]]] = []
+        for schema in self.get_all_tool_schemas():
+            name = schema.get("name", "").lower()
+            desc = schema.get("description", "").lower()
+            score = sum(2 for kw in keywords if kw in name) + sum(1 for kw in keywords if kw in desc)
+            if score > 0:
+                scored.append((score, schema))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [s for _, s in scored[:max_results]]
+
     def parse_namespaced_tool(self, namespaced_name: str) -> tuple[str, str] | None:
         """Parse 'server__tool' into (server_name, tool_name), or None."""
         if _NS_SEP not in namespaced_name:

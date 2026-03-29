@@ -16,7 +16,12 @@ load_dotenv(_PROJECT_ROOT / ".env")
 
 
 class PathsConfig(BaseModel):
-    skills_dirs: list[str] = Field(default_factory=lambda: ["skills"])
+    skills_dirs: list[str] = Field(default_factory=lambda: [
+        "skills",              # Light CC native
+        ".claude/skills",      # CC project-level skills
+        ".claude/commands",    # CC project-level commands (legacy, same abstraction)
+        "~/.claude/skills",    # CC personal skills
+    ])
     commands_dirs: list[str] = Field(default_factory=lambda: ["commands"])
     plugins_dirs: list[str] = Field(default_factory=lambda: ["plugins"])
     data_dir: str = "data"
@@ -51,6 +56,10 @@ class Settings(BaseModel):
         "claude-haiku-4-5-20251001",
         "claude-opus-4-0-20250514",
     ])
+    # Project directory for CLAUDE.md and .claude/rules/ discovery
+    project_dir: str | None = None  # defaults to CWD at runtime
+    # Hooks: event_name -> list of hook definitions
+    hooks: dict[str, list[dict]] = Field(default_factory=dict)
     # Object storage (None = local filesystem)
     s3_bucket: str | None = Field(default_factory=lambda: os.environ.get("S3_BUCKET"))
     s3_region: str = Field(default_factory=lambda: os.environ.get("S3_REGION", "us-east-1"))

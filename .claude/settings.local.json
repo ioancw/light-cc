@@ -20,7 +20,13 @@
       "WebFetch(domain:claudecn.com)",
       "Bash(curl:*)",
       "WebFetch(domain:raw.githubusercontent.com)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(gh api:*)",
+      "Bash(cygpath -w /tmp/anthropic_skills_guide.pdf)",
+      "Bash(xargs grep:*)",
+      "Bash(for skill:*)",
+      "Bash(do echo:*)",
+      "Bash(python3 -c \"import sys,json; [print\\(f[''''name'''']\\) for f in json.loads\\(sys.stdin.read\\(\\)\\)]\")"
     ]
   }
 }

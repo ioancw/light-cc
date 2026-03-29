@@ -28,6 +28,13 @@ async def handle_edit(tool_input: dict[str, Any]) -> str:
         return json.dumps({"error": f"File not found: {file_path}"})
 
     try:
+        # Checkpoint before editing
+        from core.checkpoints import snapshot_file
+        from core.session import _current_session_id
+        sid = _current_session_id.get("")
+        if sid:
+            snapshot_file(sid, str(path))
+
         text = path.read_text(encoding="utf-8")
         replace_all = tool_input.get("replace_all", False)
 

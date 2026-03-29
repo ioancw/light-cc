@@ -90,15 +90,16 @@ class PluginLoader:
             for cmd in discover_commands(commands_dir):
                 info.commands.append(cmd.name)
 
-        # 3. Load skills from skills/ directory
+        # 3. Load skills from skills/ directory (namespaced as plugin-name:skill-name)
         skills_dir = plugin_dir / "skills"
         if skills_dir.exists():
-            from skills.registry import load_skills
-            load_skills(skills_dir)
-            # Track loaded skills
+            from skills.registry import register_skill
             from skills.loader import discover_skills
             for skill in discover_skills(skills_dir):
-                info.skills.append(skill.name)
+                namespaced = f"{name}:{skill.name}"
+                skill = skill.model_copy(update={"name": namespaced})
+                register_skill(skill)
+                info.skills.append(namespaced)
 
         self._plugins[name] = info
         logger.info(

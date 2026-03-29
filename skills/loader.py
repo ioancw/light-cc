@@ -27,6 +27,7 @@ def parse_skill_file(path: Path) -> SkillDef | None:
         # No frontmatter — treat entire file as prompt, use filename as name
         return SkillDef(
             name=path.stem,
+            skill_dir=str(path.parent),
             prompt=text.strip(),
         )
 
@@ -68,6 +69,7 @@ def parse_skill_file(path: Path) -> SkillDef | None:
         context=meta.get("context", ""),
         agent=meta.get("agent", ""),
         paths=paths,
+        skill_dir=str(path.parent),
         prompt=body,
     )
 

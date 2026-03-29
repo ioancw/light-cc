@@ -21,6 +21,13 @@ async def handle_write(tool_input: dict[str, Any]) -> str:
         return err
 
     try:
+        # Checkpoint before writing
+        from core.checkpoints import snapshot_file
+        from core.session import _current_session_id, current_session_get
+        sid = _current_session_id.get("")
+        if sid:
+            snapshot_file(sid, str(path))
+
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
         return json.dumps({"status": "ok", "path": str(path), "bytes": len(content)})

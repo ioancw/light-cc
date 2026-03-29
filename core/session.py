@@ -40,6 +40,10 @@ def create_session(session_id: str, *, user_id: str = "default", conversation_id
         "user_id": user_id,
         "conversation_id": conversation_id,
         "tasks": {},
+        "permission_mode": "default",
+        "active_files": [],
+        "project_config": None,
+        "project_rules": None,
     }
     _sessions[session_id] = session
     return session
@@ -192,6 +196,45 @@ async def load_conversation(conversation_id: str) -> list[dict[str, Any]]:
         messages.append({"role": row.role, "content": content})
 
     return messages
+
+
+async def fork_conversation(source_conv_id: str, user_id: str) -> tuple[str, list[dict[str, Any]]]:
+    """Fork a conversation: copy all messages into a new Conversation row.
+
+    Returns (new_conv_id, messages).
+    """
+    messages = await load_conversation(source_conv_id)
+    if not messages:
+        raise ValueError(f"No messages found for conversation {source_conv_id}")
+
+    from core.database import get_db
+    from core.db_models import Conversation, Message
+
+    db = await get_db()
+    try:
+        # Create new conversation
+        title = _derive_title(messages) + " (fork)"
+        conv = Conversation(user_id=user_id, title=title, model=settings.model)
+        db.add(conv)
+        await db.flush()
+        new_conv_id = conv.id
+
+        # Copy messages
+        for msg in messages:
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                content = json.dumps(content)
+            db.add(Message(
+                conversation_id=new_conv_id,
+                role=msg["role"],
+                content=content if isinstance(content, str) else json.dumps(content),
+            ))
+
+        await db.commit()
+    finally:
+        await db.close()
+
+    return new_conv_id, messages
 
 
 def _derive_title(messages: list[dict]) -> str:
