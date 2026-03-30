@@ -98,6 +98,24 @@ def check_rate_limit(user_id: str, action: str) -> tuple[bool, str]:
     return True, ""
 
 
+# Per-IP WebSocket connection rate limits
+_WS_LIMIT = {"capacity": 5, "refill_rate": 5 / 60}  # 5 connections per minute per IP
+_ws_buckets: dict[str, _Bucket] = {}
+
+
+def check_ws_connect(ip: str) -> tuple[bool, str]:
+    """Check if an IP can open a new WebSocket connection."""
+    if ip not in _ws_buckets:
+        _ws_buckets[ip] = _Bucket(
+            capacity=_WS_LIMIT["capacity"],
+            refill_rate=_WS_LIMIT["refill_rate"],
+        )
+    bucket = _ws_buckets[ip]
+    if not bucket.consume():
+        return False, f"Too many connections. Try again in {bucket.retry_after:.0f}s."
+    return True, ""
+
+
 def reset_limits(user_id: str) -> None:
     """Reset rate limits for a user (e.g., admin action)."""
     _user_limits.pop(user_id, None)

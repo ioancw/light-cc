@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import os
+import warnings
 from pathlib import Path
 from typing import Any
 
 import yaml
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -67,6 +68,21 @@ class Settings(BaseModel):
     paths: PathsConfig = Field(default_factory=PathsConfig)
     server: ServerConfig = Field(default_factory=ServerConfig)
     auth: AuthConfig = Field(default_factory=AuthConfig)
+
+    @model_validator(mode="after")
+    def _check_jwt_secret(self) -> "Settings":
+        if self.jwt_secret == "change-me-in-production":
+            env = os.environ.get("ENV", "development").lower()
+            if env in ("production", "prod", "staging"):
+                raise ValueError(
+                    "JWT_SECRET must be set to a secure value in production. "
+                    "Set the JWT_SECRET environment variable."
+                )
+            warnings.warn(
+                "Using default JWT_SECRET — set JWT_SECRET env var before deploying.",
+                stacklevel=2,
+            )
+        return self
 
 
 def load_settings() -> Settings:

@@ -18,9 +18,10 @@ from typing import Any, Awaitable, Callable
 from core.client import get_client
 from core.config import settings
 from core.context import compress_if_needed
+from core.session import current_session_get
 from core.telemetry import (
     record_request, record_tokens, record_tool_call,
-    observe_agent_loop, async_trace_span,
+    observe_agent_loop, async_trace_span, audit_tool_call,
 )
 from core.usage import record_usage
 from tools.registry import execute_tool
@@ -241,7 +242,15 @@ async def run(
             ctx = await on_tool_start(call["name"], call["input"])
             _tool_t0 = time.monotonic()
             result = await execute_tool(call["name"], call["input"])
-            record_tool_call(call["name"], time.monotonic() - _tool_t0)
+            _tool_dur = time.monotonic() - _tool_t0
+            record_tool_call(call["name"], _tool_dur)
+            audit_tool_call(
+                user_id=current_session_get("user_id") or "unknown",
+                tool_name=call["name"],
+                tool_input=call["input"],
+                success="error" not in result.lower()[:100],
+                duration=_tool_dur,
+            )
             await on_tool_end(ctx, result)
 
             # Fire PostToolUse hooks

@@ -28,7 +28,7 @@ from core.telemetry import (
     session_opened, session_closed,
 )
 from core.permissions import is_blocked, is_risky, summarize_tool_call
-from core.rate_limit import check_rate_limit
+from core.rate_limit import check_rate_limit, check_ws_connect
 from core.session import (
     create_session,
     destroy_session_async,
@@ -567,6 +567,12 @@ async def _send_tables_if_any(
 # ─── WebSocket endpoint ───
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
+    # Rate limit connections per IP before accepting
+    client_ip = ws.client.host if ws.client else "unknown"
+    allowed, reason = check_ws_connect(client_ip)
+    if not allowed:
+        await ws.close(code=4029, reason=reason)
+        return
     await ws.accept()
 
     # ─── Authenticate via token query param ───
@@ -1173,15 +1179,19 @@ async def _handle_user_message(
         conv_id = await save_conversation(session_id)
         # Send usage stats with turn_complete
         usage_data = {}
+        context_tokens = 0
         try:
             from core.usage import get_user_usage_summary
+            from core.context import count_message_tokens
             _uid = session_get(session_id, "user_id") or "default"
             usage_data = await get_user_usage_summary(_uid)
+            context_tokens = await count_message_tokens(messages, system, tool_schemas)
         except Exception:
             pass
         await send_event("turn_complete", {
             "conversation_id": conv_id,
             "usage": usage_data,
+            "context_tokens": context_tokens,
         })
     except asyncio.CancelledError:
         logger.info("Agent generation cancelled by user")

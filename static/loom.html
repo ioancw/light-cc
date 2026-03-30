@@ -2541,17 +2541,26 @@ function handleServerEvent(type, data) {
         conv.serverId = data.conversation_id;
       }
       // Update token counter + context bar
+      // Use context_tokens (current context window size) for the counter and warning,
+      // not cumulative usage across all conversations.
+      if (data.context_tokens != null) {
+        state.totalTokens = data.context_tokens;
+        document.getElementById('tokenCount').textContent = data.context_tokens.toLocaleString();
+      } else if (data.usage) {
+        // Fallback if server doesn't send context_tokens
+        const inTok = data.usage.total_input_tokens || 0;
+        const outTok = data.usage.total_output_tokens || 0;
+        state.totalTokens = inTok + outTok;
+        document.getElementById('tokenCount').textContent = state.totalTokens.toLocaleString();
+      }
       if (data.usage) {
         const inTok = data.usage.total_input_tokens || 0;
         const outTok = data.usage.total_output_tokens || 0;
-        const total = inTok + outTok;
-        state.totalTokens = total;
-        document.getElementById('tokenCount').textContent = total.toLocaleString();
         const costEl = document.getElementById('tokenCounter');
         const costStr = data.usage.total_cost_usd ? `  |  $${data.usage.total_cost_usd.toFixed(4)}` : '';
-        costEl.title = `Input: ${inTok.toLocaleString()}  |  Output: ${outTok.toLocaleString()}${costStr}`;
-        checkContextUsage();
+        costEl.title = `Cumulative: ${inTok.toLocaleString()} in / ${outTok.toLocaleString()} out${costStr}`;
       }
+      checkContextUsage();
       renderMessages();
       renderChatList();
       scrollToBottom();

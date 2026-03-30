@@ -46,6 +46,7 @@ class UpdateConversationRequest(BaseModel):
 async def list_conversations(
     q: str | None = Query(None, description="Search conversations by title"),
     limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0, description="Number of records to skip"),
     user: User = Depends(get_current_user),
 ):
     db = await get_db()
@@ -56,7 +57,7 @@ async def list_conversations(
         )
         if q:
             stmt = stmt.where(Conversation.title.ilike(f"%{q}%"))
-        stmt = stmt.order_by(Conversation.updated_at.desc()).limit(limit)
+        stmt = stmt.order_by(Conversation.updated_at.desc()).offset(offset).limit(limit)
         result = await db.execute(stmt)
         rows = result.scalars().all()
     finally:

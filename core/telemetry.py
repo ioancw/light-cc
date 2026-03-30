@@ -195,6 +195,31 @@ def record_tool_call(tool_name: str, duration: float) -> None:
         TOOL_CALL_DURATION.labels(tool_name=tool_name).observe(duration)
 
 
+_audit_log = get_logger("audit")
+
+
+def audit_tool_call(
+    user_id: str,
+    tool_name: str,
+    tool_input: dict[str, Any],
+    success: bool,
+    duration: float,
+) -> None:
+    """Emit a structured audit log entry for a tool execution."""
+    input_summary = {}
+    for k, v in tool_input.items():
+        sv = str(v)
+        input_summary[k] = (sv[:200] + "...") if len(sv) > 200 else sv
+    _audit_log.info(
+        "tool_execution",
+        user_id=user_id,
+        tool_name=tool_name,
+        tool_input=input_summary,
+        success=success,
+        duration_s=round(duration, 3),
+    )
+
+
 def record_tokens(model: str, input_tokens: int, output_tokens: int) -> None:
     if _metrics_initialized:
         TOKEN_USAGE.labels(model=model, direction="input").inc(input_tokens)

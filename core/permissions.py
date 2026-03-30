@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 # Only bash commands that look destructive need confirmation.
@@ -48,6 +49,29 @@ _RISKY_PYTHON_PATTERNS = [
 ]
 
 
+def _split_command(command: str) -> list[str]:
+    """Split a shell command on separators and normalize for pattern matching.
+
+    Handles newline injection, null bytes, and chained commands so each
+    segment is checked independently against blocked/risky patterns.
+    """
+    # Replace newlines, carriage returns, and null bytes with semicolons
+    normalized = re.sub(r'[\n\r\x00]', ' ; ', command)
+    # Split on shell command separators: ; && || |
+    segments = re.split(r'\s*(?:;|&&|\|\|)\s*', normalized)
+    # Also check backtick and $() subshells by extracting their contents
+    subshells = re.findall(r'`([^`]*)`|\$\(([^)]*)\)', command)
+    for match in subshells:
+        content = match[0] or match[1]
+        if content.strip():
+            segments.append(content.strip())
+    # Always include the full command as a segment so patterns spanning
+    # separators (like fork bombs ":(){ :|:& };:") are still matched.
+    result = [command.lower()]
+    result.extend(seg.strip().lower() for seg in segments if seg.strip())
+    return result
+
+
 def _normalize(tool_name: str) -> str:
     """Resolve aliases so permission checks work with both name forms."""
     from tools.registry import resolve_tool_name
@@ -58,8 +82,12 @@ def is_blocked(tool_name: str, tool_input: dict[str, Any]) -> bool:
     """Check if a tool call should be blocked entirely."""
     name = _normalize(tool_name)
     if name == "Bash":
-        command = tool_input.get("command", "").lower()
-        return any(pattern.lower() in command for pattern in BLOCKED_PATTERNS)
+        segments = _split_command(tool_input.get("command", ""))
+        return any(
+            pattern.lower() in seg
+            for seg in segments
+            for pattern in BLOCKED_PATTERNS
+        )
     return False
 
 
@@ -67,8 +95,13 @@ def is_risky(tool_name: str, tool_input: dict[str, Any]) -> bool:
     """Check if a tool call requires user confirmation."""
     name = _normalize(tool_name)
     if name == "Bash":
-        command = tool_input.get("command", "").lower()
-        return any(pattern.lower() in command for pattern in RISKY_BASH_PATTERNS)
+        segments = _split_command(tool_input.get("command", ""))
+        if any(
+            pattern.lower() in seg
+            for seg in segments
+            for pattern in RISKY_BASH_PATTERNS
+        ):
+            return True
 
     # Flag writes/edits to system paths
     if name in ("Write", "Edit"):

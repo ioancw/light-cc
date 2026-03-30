@@ -72,3 +72,38 @@ class TestPascalCaseNames:
 
     def test_python_exec_risky_pascal(self):
         assert is_risky("PythonExec", {"script": "import os; os.system('rm -rf /')"})
+
+
+class TestBypassPrevention:
+    """Verify that shell injection / bypass attempts are caught."""
+
+    def test_newline_injection_blocked(self):
+        assert is_blocked("bash", {"command": "echo safe\nrm -rf /"})
+
+    def test_newline_injection_risky(self):
+        assert is_risky("bash", {"command": "echo safe\nrm -rf mydir"})
+
+    def test_semicolon_chain_blocked(self):
+        assert is_blocked("bash", {"command": "echo safe; rm -rf /"})
+
+    def test_and_chain_blocked(self):
+        assert is_blocked("bash", {"command": "echo safe && rm -rf /"})
+
+    def test_or_chain_blocked(self):
+        assert is_blocked("bash", {"command": "echo safe || rm -rf /"})
+
+    def test_backtick_subshell_blocked(self):
+        assert is_blocked("bash", {"command": "echo `rm -rf /`"})
+
+    def test_dollar_subshell_blocked(self):
+        assert is_blocked("bash", {"command": "echo $(rm -rf /)"})
+
+    def test_carriage_return_injection(self):
+        assert is_blocked("bash", {"command": "echo safe\rrm -rf /"})
+
+    def test_null_byte_injection(self):
+        assert is_blocked("bash", {"command": "echo safe\x00rm -rf /"})
+
+    def test_clean_command_still_allowed(self):
+        assert not is_blocked("bash", {"command": "echo hello && ls -la"})
+        assert not is_risky("bash", {"command": "echo hello && ls -la"})
