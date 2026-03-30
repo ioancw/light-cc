@@ -710,11 +710,20 @@ async def websocket_endpoint(ws: WebSocket):
                         # Build renderable messages with tool calls for the frontend
                         render_messages = _rebuild_render_messages(messages)
 
+                        # Count context tokens so the UI shows accurate window usage
+                        ctx_tokens = 0
+                        try:
+                            from core.context import count_message_tokens
+                            ctx_tokens = await count_message_tokens(messages, "", None)
+                        except Exception:
+                            pass
+
                         await send_event("conversation_loaded", {
                             "conversation_id": conv_id,
                             "message_count": len(messages),
                             "model": conv_model or settings.model,
                             "messages": render_messages,
+                            "context_tokens": ctx_tokens,
                         })
                     except Exception as e:
                         logger.error(f"Failed to load conversation {conv_id}: {e}", exc_info=True)

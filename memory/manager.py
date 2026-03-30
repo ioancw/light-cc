@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from contextvars import ContextVar
 from datetime import date
 from pathlib import Path
@@ -50,20 +51,36 @@ def ensure_user_dirs(user_id: str) -> None:
 
 
 def load_memory(user_id: str) -> str:
-    """Load user's MEMORY.md for injection into system prompt."""
+    """Load memory index for injection into system prompt.
+
+    Returns a listing of available memory files with titles so the model
+    knows what's available. Individual files can be read on demand via
+    the ReadMemory tool (Zettelkasten pattern).
+    """
     ensure_user_dirs(user_id)
-    index = _memory_index(user_id)
-    text = index.read_text(encoding="utf-8").strip()
-    if text == f"# Memory for {user_id}":
-        return ""  # Empty memory
-    return text
+    mem_dir = _memory_dir(user_id)
+    files = sorted(mem_dir.glob("*.md"))
+    if not files:
+        return ""
+    lines: list[str] = []
+    for f in files:
+        # Extract first heading or use filename as title
+        text = f.read_text(encoding="utf-8").strip()
+        title = f.stem
+        for line in text.splitlines():
+            stripped = line.strip().lstrip("#").strip()
+            if stripped:
+                title = stripped
+                break
+        lines.append(f"- **{title}** (`{f.name}`)")
+    return "Available memories (use ReadMemory to view full content):\n" + "\n".join(lines)
 
 
 def save_memory(user_id: str, title: str, content: str) -> str:
     """Save a memory entry. Returns the file path."""
     ensure_user_dirs(user_id)
     today = date.today().isoformat()
-    slug = title.lower().replace(" ", "-")[:50]
+    slug = re.sub(r"[^\w\-]", "", title.lower().replace(" ", "-"))[:50]
     filename = f"{today}-{slug}.md"
     filepath = _memory_dir(user_id) / filename
 
@@ -72,7 +89,7 @@ def save_memory(user_id: str, title: str, content: str) -> str:
     # Append to index (with file lock for concurrent safety)
     index = _memory_index(user_id)
     lock = FileLock(str(index) + ".lock")
-    entry = f"\n## {today}: {title}\n{content[:100]}...\nSee: memory/{filename}\n"
+    entry = f"\n- [{title}](memory/{filename})\n"
     with lock:
         with open(index, "a", encoding="utf-8") as f:
             f.write(entry)
@@ -80,24 +97,46 @@ def save_memory(user_id: str, title: str, content: str) -> str:
     return str(filepath)
 
 
+def read_memory(user_id: str, filename: str) -> str | None:
+    """Read a single memory file by filename. Returns content or None."""
+    ensure_user_dirs(user_id)
+    filepath = _memory_dir(user_id) / filename
+    # Prevent path traversal
+    if ".." in filename or "/" in filename or "\\" in filename:
+        return None
+    if not filepath.exists():
+        return None
+    return filepath.read_text(encoding="utf-8")
+
+
 def search_memory(user_id: str, query: str) -> list[dict[str, str]]:
-    """Search memory files by keyword."""
+    """Search memory files by keyword. Returns matching files with full content."""
     ensure_user_dirs(user_id)
     query_lower = query.lower()
     results: list[dict[str, str]] = []
 
-    for md_file in _memory_dir(user_id).glob("*.md"):
+    for md_file in sorted(_memory_dir(user_id).glob("*.md")):
         text = md_file.read_text(encoding="utf-8")
         if query_lower in text.lower():
-            results.append({"file": md_file.name, "content": text[:500]})
+            results.append({"file": md_file.name, "content": text})
 
     return results
 
 
-def list_memories(user_id: str) -> list[str]:
-    """List all memory file names."""
+def list_memories(user_id: str) -> list[dict[str, str]]:
+    """List all memory files with titles."""
     ensure_user_dirs(user_id)
-    return sorted(f.name for f in _memory_dir(user_id).glob("*.md"))
+    entries: list[dict[str, str]] = []
+    for f in sorted(_memory_dir(user_id).glob("*.md")):
+        text = f.read_text(encoding="utf-8").strip()
+        title = f.stem
+        for line in text.splitlines():
+            stripped = line.strip().lstrip("#").strip()
+            if stripped:
+                title = stripped
+                break
+        entries.append({"file": f.name, "title": title})
+    return entries
 
 
 # --- Memory tools (registered for Claude to use) ---
@@ -115,6 +154,16 @@ async def handle_save_memory(tool_input: dict[str, Any]) -> str:
         return json.dumps({"error": "No content provided"})
     path = save_memory(_current_user_id.get(), title, content)
     return json.dumps({"status": "saved", "path": path})
+
+
+async def handle_read_memory(tool_input: dict[str, Any]) -> str:
+    filename = tool_input.get("filename", "")
+    if not filename:
+        return json.dumps({"error": "No filename provided"})
+    content = read_memory(_current_user_id.get(), filename)
+    if content is None:
+        return json.dumps({"error": f"Memory file not found: {filename}"})
+    return json.dumps({"file": filename, "content": content})
 
 
 async def handle_search_memory(tool_input: dict[str, Any]) -> str:
@@ -149,6 +198,23 @@ register_tool(
         "required": ["title", "content"],
     },
     handler=handle_save_memory,
+)
+
+register_tool(
+    name="ReadMemory",
+    aliases=["read_memory"],
+    description="Read the full content of a specific memory file. Use after ListMemories or SearchMemory to view a particular note.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "filename": {
+                "type": "string",
+                "description": "The memory filename (e.g., '2026-03-29-sofr-yield-curve-imp.md')",
+            },
+        },
+        "required": ["filename"],
+    },
+    handler=handle_read_memory,
 )
 
 register_tool(

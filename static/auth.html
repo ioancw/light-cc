@@ -4,16 +4,19 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Light CC — Sign In</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%236366f1'/><path d='M18 4L8 19h6l-2 9 10-15h-6l2-9z' fill='white'/></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@300;400;500;600&family=Lora:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet">
 <style>
   :root {
-    --bg: #0a0a0f;
-    --surface: #12121a;
-    --surface2: #1a1a26;
-    --border: #1e1e2e;
-    --border2: #2a2a3e;
-    --fg: #e2e2e8;
-    --fg-dim: #9898aa;
-    --muted: #5a5a6e;
+    --bg: #0c0c0e;
+    --surface: #111115;
+    --surface2: #16161c;
+    --border: #1e1e26;
+    --border2: #28282e;
+    --fg: #c4c4d4;
+    --fg-dim: #8888a0;
+    --muted: #3c3c4e;
     --accent: #6366f1;
     --accent-hover: #818cf8;
     --red: #ef4444;
@@ -25,7 +28,7 @@
   body {
     background: var(--bg);
     color: var(--fg);
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    font-family: 'Geist Mono', monospace;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -46,6 +49,7 @@
     margin-bottom: 32px;
   }
   .auth-logo h1 {
+    font-family: 'Lora', serif;
     font-size: 22px;
     font-weight: 600;
     letter-spacing: -0.02em;
@@ -96,6 +100,7 @@
     border: 1px solid var(--border2);
     border-radius: 6px;
     color: var(--fg);
+    font-family: 'Geist Mono', monospace;
     font-size: 14px;
     outline: none;
     transition: border-color 0.2s;
@@ -111,6 +116,7 @@
     color: #fff;
     border: none;
     border-radius: 6px;
+    font-family: 'Geist Mono', monospace;
     font-size: 14px;
     font-weight: 500;
     cursor: pointer;
@@ -119,6 +125,19 @@
   }
   .submit-btn:hover { background: var(--accent-hover); }
   .submit-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .submit-btn.loading { position: relative; color: transparent; }
+  .submit-btn.loading::after {
+    content: '';
+    position: absolute;
+    width: 16px; height: 16px;
+    top: 50%; left: 50%;
+    margin: -8px 0 0 -8px;
+    border: 2px solid rgba(255,255,255,0.3);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: spin 0.6s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
 
   .error-msg {
     color: var(--red);
@@ -202,6 +221,7 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
   errEl.textContent = '';
   const btn = e.target.querySelector('.submit-btn');
   btn.disabled = true;
+  btn.classList.add('loading');
 
   try {
     const resp = await fetch(`${API}/login`, {
@@ -222,6 +242,7 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
     errEl.textContent = 'Network error';
   } finally {
     btn.disabled = false;
+    btn.classList.remove('loading');
   }
 });
 
@@ -231,6 +252,7 @@ document.getElementById('register-form').addEventListener('submit', async (e) =>
   errEl.textContent = '';
   const btn = e.target.querySelector('.submit-btn');
   btn.disabled = true;
+  btn.classList.add('loading');
 
   try {
     const resp = await fetch(`${API}/register`, {
@@ -252,6 +274,7 @@ document.getElementById('register-form').addEventListener('submit', async (e) =>
     errEl.textContent = 'Network error';
   } finally {
     btn.disabled = false;
+    btn.classList.remove('loading');
   }
 });
 
