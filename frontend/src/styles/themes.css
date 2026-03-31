@@ -1,0 +1,123 @@
+/* All 5 theme variable sets -- ported from loom.css */
+
+:root {
+  --bg:           #0c0c0e;
+  --surface:      #111115;
+  --surface2:     #16161c;
+  --border:       #1e1e26;
+  --border2:      #28282e;
+  --muted:        #3c3c4e;
+  --dim:          #5a5a72;
+  --fg:           #c4c4d4;
+  --fg-bright:    #e8e8f2;
+  --fg-dim:       #8888a0;
+  --accent:       #6366f1;
+  --accent-soft:  #818cf8;
+  --accent-glow:  rgba(99,102,241,0.15);
+  --green:        #10b981;
+  --green-soft:   rgba(16,185,129,0.12);
+  --amber:        #f59e0b;
+  --amber-soft:   rgba(245,158,11,0.1);
+  --red:          #ef4444;
+  --red-soft:     rgba(239,68,68,0.1);
+  --blue:         #38bdf8;
+  --blue-soft:    rgba(56,189,248,0.1);
+  --sidebar-w:    240px;
+  --radius:       6px;
+}
+
+[data-theme="light"] {
+  --bg:           #f5f5f7;
+  --surface:      #ffffff;
+  --surface2:     #eeeef0;
+  --border:       #d8d8de;
+  --border2:      #c8c8d0;
+  --muted:        #9898a8;
+  --dim:          #6e6e82;
+  --fg:           #3a3a4a;
+  --fg-bright:    #1a1a2a;
+  --fg-dim:       #5a5a6e;
+  --accent:       #4f46e5;
+  --accent-soft:  #6366f1;
+  --accent-glow:  rgba(79,70,229,0.1);
+  --green:        #059669;
+  --green-soft:   rgba(5,150,105,0.1);
+  --amber:        #d97706;
+  --amber-soft:   rgba(217,119,6,0.08);
+  --red:          #dc2626;
+  --red-soft:     rgba(220,38,38,0.08);
+  --blue:         #0284c7;
+  --blue-soft:    rgba(2,132,199,0.08);
+}
+
+[data-theme="dracula"] {
+  --bg:           #282a36;
+  --surface:      #2d2f3d;
+  --surface2:     #343647;
+  --border:       #44475a;
+  --border2:      #515470;
+  --muted:        #6272a4;
+  --dim:          #7889b8;
+  --fg:           #cdd6f4;
+  --fg-bright:    #f8f8f2;
+  --fg-dim:       #a0aece;
+  --accent:       #bd93f9;
+  --accent-soft:  #caa6fc;
+  --accent-glow:  rgba(189,147,249,0.15);
+  --green:        #50fa7b;
+  --green-soft:   rgba(80,250,123,0.12);
+  --amber:        #f1fa8c;
+  --amber-soft:   rgba(241,250,140,0.1);
+  --red:          #ff5555;
+  --red-soft:     rgba(255,85,85,0.1);
+  --blue:         #8be9fd;
+  --blue-soft:    rgba(139,233,253,0.1);
+}
+
+[data-theme="solarized"] {
+  --bg:           #002b36;
+  --surface:      #073642;
+  --surface2:     #0a3f4e;
+  --border:       #1a4f5e;
+  --border2:      #2a5f6e;
+  --muted:        #586e75;
+  --dim:          #657b83;
+  --fg:           #93a1a1;
+  --fg-bright:    #eee8d5;
+  --fg-dim:       #839496;
+  --accent:       #268bd2;
+  --accent-soft:  #4aa3e0;
+  --accent-glow:  rgba(38,139,210,0.15);
+  --green:        #859900;
+  --green-soft:   rgba(133,153,0,0.12);
+  --amber:        #b58900;
+  --amber-soft:   rgba(181,137,0,0.1);
+  --red:          #dc322f;
+  --red-soft:     rgba(220,50,47,0.1);
+  --blue:         #2aa198;
+  --blue-soft:    rgba(42,161,152,0.1);
+}
+
+[data-theme="nord"] {
+  --bg:           #2e3440;
+  --surface:      #3b4252;
+  --surface2:     #434c5e;
+  --border:       #4c566a;
+  --border2:      #5a657a;
+  --muted:        #616e88;
+  --dim:          #7b88a1;
+  --fg:           #d8dee9;
+  --fg-bright:    #eceff4;
+  --fg-dim:       #a3b1cc;
+  --accent:       #88c0d0;
+  --accent-soft:  #8fbcbb;
+  --accent-glow:  rgba(136,192,208,0.15);
+  --green:        #a3be8c;
+  --green-soft:   rgba(163,190,140,0.12);
+  --amber:        #ebcb8b;
+  --amber-soft:   rgba(235,203,139,0.1);
+  --red:          #bf616a;
+  --red-soft:     rgba(191,97,106,0.1);
+  --blue:         #5e81ac;
+  --blue-soft:    rgba(94,129,172,0.1);
+}

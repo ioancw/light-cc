@@ -32,6 +32,7 @@ class PathsConfig(BaseModel):
 class ServerConfig(BaseModel):
     host: str = "0.0.0.0"
     port: int = 8000
+    frontend: str = "classic"  # "classic" or "svelte"
 
 
 class AuthConfig(BaseModel):

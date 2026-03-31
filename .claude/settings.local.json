@@ -34,7 +34,8 @@
       "Bash(echo \"OK: $ref\")",
       "Bash(grep -E \"\\(^[^/]*\\\\.py$|/\\(core|routes|skills|tools|plugins\\)/\\)\")",
       "Bash(grep -r \"def \" /c/Users/ioanc/github/light_cc/core/*.py)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(npm run:*)"
     ]
   }
 }

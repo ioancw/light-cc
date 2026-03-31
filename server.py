@@ -173,6 +173,14 @@ app.include_router(files_router)
 app.include_router(usage_router)
 app.mount("/static", StaticFiles(directory=str(_PROJECT_ROOT / "static")), name="static")
 
+# Svelte frontend: serve Vite build assets from frontend/dist/assets/
+_SVELTE_DIST = _PROJECT_ROOT / "frontend" / "dist"
+if settings.server.frontend == "svelte":
+    if _SVELTE_DIST.exists() and (_SVELTE_DIST / "assets").exists():
+        app.mount("/assets", StaticFiles(directory=str(_SVELTE_DIST / "assets")), name="svelte-assets")
+    else:
+        logger.warning("frontend=svelte but frontend/dist/ not found — run 'npm run build' in frontend/")
+
 
 @app.on_event("startup")
 async def startup():
@@ -254,11 +262,15 @@ async def metrics():
 @app.get("/")
 async def index():
     """Serve main app if authenticated, otherwise auth page."""
+    if settings.server.frontend == "svelte" and (_SVELTE_DIST / "index.html").exists():
+        return FileResponse(str(_SVELTE_DIST / "index.html"))
     return FileResponse(str(_PROJECT_ROOT / "static" / "loom.html"))
 
 
 @app.get("/login")
 async def login_page():
+    if settings.server.frontend == "svelte" and (_SVELTE_DIST / "index.html").exists():
+        return FileResponse(str(_SVELTE_DIST / "index.html"))
     return FileResponse(str(_PROJECT_ROOT / "static" / "auth.html"))
 
 
