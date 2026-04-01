@@ -210,7 +210,12 @@ function handleEvent(type, data) {
       break;
 
     case 'skill_activated':
-      showToast(`Skill activated: ${data.name || 'unknown'}`, 'success');
+      appState.inlineStatus = { message: `skill: ${data.name || 'unknown'}`, type: 'info' };
+      setTimeout(() => {
+        if (appState.inlineStatus?.message?.includes(data.name || 'unknown')) {
+          appState.inlineStatus = null;
+        }
+      }, 4000);
       break;
 
     case 'generation_cancelled':
@@ -219,11 +224,13 @@ function handleEvent(type, data) {
         if (!msg.content) msg.content = '(cancelled)';
       }
       appState.isStreaming = false;
+      appState.inlineStatus = null;
       break;
 
     case 'turn_complete':
       if (msg) msg.streaming = false;
       appState.isStreaming = false;
+      appState.inlineStatus = null;
       if (data.conversation_id && conv) {
         conv.serverId = data.conversation_id;
       }

@@ -37,6 +37,12 @@
       autoScroll = true;
     }
   }
+
+  // Expose scroll state and function to InputBar via appState
+  $effect(() => {
+    appState.needsScrollDown = !autoScroll;
+    appState.scrollToBottom = scrollToBottom;
+  });
 </script>
 
 <div class="messages" bind:this={messagesEl} onscroll={onScroll}>
@@ -47,6 +53,9 @@
       </div>
       <h2>Start a conversation</h2>
       <p>An AI assistant with tools for code execution, data analysis, and visualization.</p>
+      <button class="empty-cta" onclick={() => document.querySelector('.input-textarea')?.focus()}>
+        Type a message to begin
+      </button>
     </div>
   {:else}
     {#each currentConversation().messages as msg (msg.id)}
@@ -55,9 +64,6 @@
   {/if}
 </div>
 
-{#if !autoScroll}
-  <button class="scroll-bottom-btn" onclick={scrollToBottom}>scroll to bottom</button>
-{/if}
 
 <style>
   .messages {
@@ -75,54 +81,72 @@
     align-items: center;
     justify-content: center;
     height: 100%;
-    gap: 20px;
+    gap: 24px;
     padding: 40px;
     text-align: center;
+    animation: empty-fade-in 0.5s ease;
+  }
+  @keyframes empty-fade-in {
+    from { opacity: 0; transform: translateY(12px); }
+    to { opacity: 1; transform: translateY(0); }
   }
 
   .empty-logo {
-    width: 48px; height: 48px;
+    width: 52px; height: 52px;
     background: linear-gradient(135deg, var(--accent) 0%, #a78bfa 100%);
-    border-radius: 12px;
+    border-radius: 14px;
     display: flex; align-items: center; justify-content: center;
-    box-shadow: 0 0 40px rgba(99,102,241,0.25);
+    box-shadow: 0 0 40px rgba(99,102,241,0.25), 0 8px 32px rgba(99,102,241,0.15);
     animation: float 4s ease-in-out infinite;
+    position: relative;
+  }
+  .empty-logo::after {
+    content: '';
+    position: absolute;
+    inset: -4px;
+    border-radius: 18px;
+    background: linear-gradient(135deg, var(--accent) 0%, #a78bfa 100%);
+    opacity: 0.15;
+    z-index: -1;
+    animation: float 4s ease-in-out infinite reverse;
   }
   @keyframes float {
-    0%, 100% { transform: translateY(0); }
-    50% { transform: translateY(-5px); }
+    0%, 100% { transform: translateY(0) rotate(0deg); }
+    50% { transform: translateY(-6px) rotate(1deg); }
   }
 
   .empty-state h2 {
-    font-size: 15px;
+    font-size: 17px;
     color: var(--fg-dim);
     font-weight: 500;
-    letter-spacing: 0.04em;
+    letter-spacing: -0.01em;
     font-family: 'Lora', serif;
   }
   .empty-state p {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--muted);
-    max-width: 340px;
-    line-height: 1.9;
+    max-width: 360px;
+    line-height: 1.8;
   }
-
-  .scroll-bottom-btn {
-    position: absolute;
-    bottom: 80px;
-    right: 36px;
-    background: var(--surface2);
-    border: 1px solid var(--border2);
-    border-radius: 20px;
+  .empty-cta {
+    background: transparent;
+    border: 1px dashed var(--border2);
+    border-radius: 8px;
     color: var(--fg-dim);
-    padding: 6px 14px;
-    cursor: pointer;
+    padding: 10px 24px;
     font-family: 'Geist Mono', monospace;
     font-size: 11px;
-    letter-spacing: 0.05em;
-    z-index: 50;
-    transition: all 0.15s;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+    letter-spacing: 0.04em;
+    cursor: pointer;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
   }
-  .scroll-bottom-btn:hover { border-color: var(--accent); color: var(--fg); }
+  .empty-cta:hover {
+    border-color: var(--accent);
+    border-style: solid;
+    color: var(--accent-soft);
+    background: var(--accent-glow);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(99,102,241,0.2);
+  }
+
 </style>

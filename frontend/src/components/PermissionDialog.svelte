@@ -53,11 +53,13 @@
     position: fixed;
     inset: 0;
     background: rgba(0,0,0,0.6);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
     z-index: 5000;
     display: flex;
     align-items: center;
     justify-content: center;
-    animation: fade-in 0.15s ease;
+    animation: fade-in 0.2s ease;
   }
   @keyframes fade-in {
     from { opacity: 0; }
@@ -67,14 +69,15 @@
   .permission-dialog {
     background: var(--surface);
     border: 1px solid var(--border2);
-    border-radius: 8px;
-    padding: 24px;
+    border-radius: 12px;
+    padding: 28px;
     max-width: 460px;
     width: 90%;
-    animation: dialog-in 0.18s ease;
+    animation: dialog-in 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: 0 16px 48px rgba(0,0,0,0.3);
   }
   @keyframes dialog-in {
-    from { opacity: 0; transform: translateY(6px) scale(0.98); }
+    from { opacity: 0; transform: translateY(8px) scale(0.97); }
     to   { opacity: 1; transform: translateY(0) scale(1); }
   }
 

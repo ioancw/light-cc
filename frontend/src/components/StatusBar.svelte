@@ -36,10 +36,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0 24px;
-    height: 28px;
-    border-bottom: 1px solid var(--border);
-    background: var(--surface);
+    padding: 0;
     flex-shrink: 0;
     font-size: 11px;
   }
@@ -54,6 +51,11 @@
     width: 6px; height: 6px;
     border-radius: 50%;
     flex-shrink: 0;
+    animation: status-pulse 2s ease-in-out infinite;
+  }
+  @keyframes status-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
   }
 
   .status-text {
@@ -69,5 +71,6 @@
   }
   .token-value {
     color: var(--accent-soft);
+    font-weight: 600;
   }
 </style>

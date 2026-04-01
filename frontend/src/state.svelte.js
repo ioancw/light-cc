@@ -39,6 +39,13 @@ export const appState = $state({
 
   // Toasts (notification messages)
   toasts: [],
+
+  // Inline status messages (shown in input footer instead of toasts)
+  inlineStatus: null, // { message, type } or null
+
+  // Scroll state (shared between ChatArea and InputBar)
+  needsScrollDown: false,
+  scrollToBottom: null, // function ref set by ChatArea
 });
 
 // Svelte 5 does not allow exporting $derived from modules.

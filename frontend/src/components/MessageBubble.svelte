@@ -46,7 +46,7 @@
     <div class="msg-avatar user-av">U</div>
   {:else}
     <div class="msg-avatar ai-av">
-      <svg width="14" height="16" viewBox="0 0 10 12" fill="none"><path d="M6 0L0 7h4l-1 5 6-7H5l1-5z" fill="#fff"/></svg>
+      <svg width="12" height="14" viewBox="0 0 10 12" fill="none"><path d="M6 0L0 7h4l-1 5 6-7H5l1-5z" fill="#fff"/></svg>
     </div>
   {/if}
   <div class="msg-body" bind:this={bodyEl}>
@@ -96,17 +96,18 @@
 
 <style>
   .msg-row {
-    padding: 22px 24px;
+    padding: 10px 28px;
     border-bottom: 1px solid var(--border);
     display: grid;
-    grid-template-columns: 32px 1fr;
-    gap: 16px;
+    grid-template-columns: 28px 1fr;
+    gap: 14px;
     align-items: start;
-    animation: msg-in 0.18s ease;
+    animation: msg-in 0.25s cubic-bezier(0.4, 0, 0.2, 1);
     position: relative;
+    transition: background 0.15s ease;
   }
   @keyframes msg-in {
-    from { opacity: 0; transform: translateY(6px); }
+    from { opacity: 0; transform: translateY(8px); }
     to   { opacity: 1; transform: translateY(0); }
   }
 
@@ -118,17 +119,20 @@
     left: 0; top: 0; bottom: 0;
     width: 2px;
     background: linear-gradient(to bottom, var(--accent) 0%, transparent 100%);
-    opacity: 0.6;
+    opacity: 0.5;
   }
+  .msg-row:hover { background: color-mix(in srgb, var(--surface2) 30%, transparent); }
 
   .msg-avatar {
-    width: 32px; height: 32px;
+    width: 28px; height: 28px;
     border-radius: 6px;
     display: flex; align-items: center; justify-content: center;
-    font-size: 12px; font-weight: 600;
+    font-size: 11px; font-weight: 600;
     flex-shrink: 0;
     margin-top: 1px;
+    transition: transform 0.2s ease;
   }
+  .msg-row:hover .msg-avatar { transform: scale(1.05); }
   .msg-avatar.user-av {
     background: var(--surface2);
     border: 1px solid var(--border2);
@@ -137,14 +141,14 @@
   .msg-avatar.ai-av {
     background: linear-gradient(135deg, #4338ca 0%, #7c3aed 100%);
     color: #fff;
-    box-shadow: 0 0 14px rgba(124,58,237,0.35);
+    box-shadow: 0 0 14px rgba(124,58,237,0.3);
   }
 
   .msg-body { min-width: 0; max-width: 100%; overflow: hidden; }
 
   .msg-header {
     display: flex; align-items: baseline; gap: 10px;
-    margin-bottom: 8px;
+    margin-bottom: 4px;
   }
   .msg-role {
     font-size: 11px;
@@ -174,15 +178,15 @@
     background: transparent;
     border: 1px solid transparent;
     color: var(--muted);
-    padding: 2px 6px;
-    border-radius: 3px;
+    padding: 3px 8px;
+    border-radius: 4px;
     cursor: pointer;
     font-size: 11px;
     font-family: 'Geist Mono', monospace;
     letter-spacing: 0.05em;
-    transition: all 0.12s;
+    transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
   }
-  .msg-action-btn:hover { border-color: var(--border2); color: var(--fg-dim); background: var(--surface); }
+  .msg-action-btn:hover { border-color: var(--border2); color: var(--fg-dim); background: var(--surface2); }
 
   .tool-calls-container {
     margin: 10px 0;

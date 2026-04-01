@@ -24,6 +24,7 @@
   --blue-soft:    rgba(56,189,248,0.1);
   --sidebar-w:    240px;
   --radius:       6px;
+  --transition:   cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 [data-theme="light"] {

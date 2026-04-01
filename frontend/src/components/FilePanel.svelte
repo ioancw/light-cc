@@ -120,7 +120,7 @@
 
     <div class="file-list">
       {#if loading}
-        <div class="file-panel-empty">Loading...</div>
+        <div class="file-panel-empty"><span class="file-spinner"></span> Loading...</div>
       {:else if error}
         <div class="file-panel-empty file-error">Error: {error}</div>
       {:else if entries.length === 0}
@@ -154,22 +154,30 @@
   .file-panel-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0,0,0,0.3);
+    background: rgba(0,0,0,0.4);
+    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2px);
     z-index: 299;
+    animation: overlay-in 0.2s ease;
+  }
+  @keyframes overlay-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
   }
 
   .file-panel {
     position: fixed;
     right: 0; top: 0; bottom: 0;
-    width: 320px;
+    width: 340px;
     max-width: 100%;
     background: var(--surface);
     border-left: 1px solid var(--border);
     z-index: 300;
     display: flex;
     flex-direction: column;
-    animation: slide-in 0.2s ease;
+    animation: slide-in 0.25s cubic-bezier(0.4, 0, 0.2, 1);
     font-family: 'Geist Mono', monospace;
+    box-shadow: -8px 0 32px rgba(0,0,0,0.2);
   }
   @keyframes slide-in {
     from { transform: translateX(100%); }
@@ -246,18 +254,30 @@
   }
   .file-error { color: var(--red); }
 
+  .file-spinner {
+    display: inline-block;
+    width: 12px; height: 12px;
+    border: 1.5px solid var(--border2);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: file-spin 0.6s linear infinite;
+    vertical-align: middle;
+    margin-right: 6px;
+  }
+  @keyframes file-spin { to { transform: rotate(360deg); } }
+
   .file-entry {
-    padding: 7px 16px;
+    padding: 8px 16px;
     display: flex;
     align-items: center;
     gap: 8px;
     cursor: pointer;
     font-size: 11px;
     color: var(--fg-dim);
-    transition: background 0.12s;
+    transition: background 0.15s, color 0.15s;
     border-bottom: 1px solid var(--border);
   }
-  .file-entry:hover { background: var(--surface2); }
+  .file-entry:hover { background: var(--surface2); color: var(--fg-bright); }
 
   .file-entry-icon {
     color: var(--muted);

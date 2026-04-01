@@ -102,24 +102,44 @@
     justify-content: center;
     min-height: 100vh;
     background: var(--bg);
+    position: relative;
+    overflow: hidden;
+  }
+  .auth-page::before {
+    content: '';
+    position: absolute;
+    width: 500px; height: 500px;
+    background: radial-gradient(circle, var(--accent-glow) 0%, transparent 70%);
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+    opacity: 0.6;
   }
 
   .auth-card {
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 40px;
+    border-radius: 14px;
+    padding: 44px;
     width: 100%;
     max-width: 400px;
+    position: relative;
+    z-index: 1;
+    box-shadow: 0 8px 40px rgba(0,0,0,0.15);
+    animation: auth-in 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  @keyframes auth-in {
+    from { opacity: 0; transform: translateY(12px) scale(0.98); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
   }
 
   .auth-logo {
     text-align: center;
-    margin-bottom: 32px;
+    margin-bottom: 36px;
   }
   .auth-logo h1 {
     font-family: 'Lora', serif;
-    font-size: 22px;
+    font-size: 24px;
     font-weight: 600;
     letter-spacing: -0.02em;
     color: var(--fg-bright);
@@ -127,7 +147,8 @@
   .auth-logo p {
     color: var(--fg-dim);
     font-size: 13px;
-    margin-top: 6px;
+    margin-top: 8px;
+    letter-spacing: 0.06em;
   }
 
   .tabs {
@@ -180,6 +201,7 @@
   }
   .form-group input:focus {
     border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-glow);
   }
 
   .submit-btn {

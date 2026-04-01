@@ -122,19 +122,24 @@
 <style>
   .tool-block {
     border: 1px solid var(--border2);
-    border-radius: 5px;
+    border-radius: 6px;
     overflow: hidden;
     background: var(--surface);
     font-family: 'Geist Mono', monospace;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  }
+  .tool-block:hover {
+    border-color: var(--muted);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
   }
 
   .tool-header {
-    padding: 8px 14px;
+    padding: 9px 14px;
     display: flex;
     align-items: center;
     gap: 10px;
     cursor: pointer;
-    transition: background 0.12s;
+    transition: background 0.15s ease;
   }
   .tool-header:hover { background: var(--surface2); }
 

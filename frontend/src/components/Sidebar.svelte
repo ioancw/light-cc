@@ -215,6 +215,10 @@
       {/each}
     </div>
     <StatusBar />
+    <div class="shortcut-hints">
+      <span><span class="kbd">Ctrl+B</span> sidebar</span>
+      <span><span class="kbd">Ctrl+K</span> new chat</span>
+    </div>
     <button class="logout-btn" onclick={logout}>Sign Out</button>
   </div>
 </aside>
@@ -234,7 +238,7 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    transition: margin-left 0.2s ease, opacity 0.2s ease;
+    transition: margin-left 0.25s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.2s ease;
     width: var(--sidebar-w);
     flex-shrink: 0;
   }
@@ -253,19 +257,23 @@
   }
 
   .logo-mark {
-    width: 18px; height: 18px;
+    width: 20px; height: 20px;
     background: linear-gradient(135deg, var(--accent) 0%, #a78bfa 100%);
-    border-radius: 3px;
+    border-radius: 4px;
     display: flex; align-items: center; justify-content: center;
-    box-shadow: 0 0 10px rgba(99,102,241,0.35);
+    box-shadow: 0 0 12px rgba(99,102,241,0.35);
     flex-shrink: 0;
+    transition: box-shadow 0.3s ease;
+  }
+  .sidebar-header:hover .logo-mark {
+    box-shadow: 0 0 18px rgba(99,102,241,0.5);
   }
 
   .logo-name {
     font-size: 13px;
     font-weight: 600;
     color: var(--fg-bright);
-    letter-spacing: 0.04em;
+    letter-spacing: 0.06em;
   }
 
   .sidebar-close-btn {
@@ -283,22 +291,25 @@
 
   .new-chat-btn {
     margin: 12px 12px 8px;
-    padding: 8px 12px;
+    padding: 9px 12px;
     background: transparent;
-    border: 1px solid var(--border2);
+    border: 1px dashed var(--border2);
     border-radius: var(--radius);
     color: var(--fg-dim);
     font-family: 'Geist Mono', monospace;
     font-size: 11px;
     cursor: pointer;
     display: flex; align-items: center; gap: 8px;
-    transition: all 0.15s;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
     letter-spacing: 0.03em;
   }
   .new-chat-btn:hover {
     border-color: var(--accent);
+    border-style: solid;
     color: var(--accent-soft);
     background: var(--accent-glow);
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px rgba(99,102,241,0.15);
   }
 
   .sidebar-actions {
@@ -348,7 +359,7 @@
     font-size: 11px;
     outline: none;
   }
-  .sidebar-search input:focus { border-color: var(--accent); }
+  .sidebar-search input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-glow); }
   .sidebar-search input::placeholder { color: var(--muted); }
 
   .chat-list {
@@ -360,37 +371,39 @@
   }
 
   .chat-item {
-    padding: 7px 10px;
-    border-radius: 4px;
+    padding: 8px 10px;
+    border-radius: 5px;
     cursor: pointer;
     font-size: 11px;
     color: var(--dim);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    transition: all 0.12s;
+    transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
     border: 1px solid transparent;
-    margin-bottom: 1px;
-    display: flex; align-items: center; gap: 7px;
+    margin-bottom: 2px;
+    display: flex; align-items: center; gap: 8px;
     background: none;
     width: 100%;
     text-align: left;
     font-family: 'Geist Mono', monospace;
   }
-  .chat-item:hover { color: var(--fg); background: var(--border); }
+  .chat-item:hover { color: var(--fg); background: var(--surface2); }
   .chat-item.active {
     color: var(--fg-bright);
     background: var(--surface2);
     border-color: var(--border2);
+    box-shadow: inset 2px 0 0 var(--accent);
   }
 
   .chat-item-dot {
-    width: 4px; height: 4px;
+    width: 5px; height: 5px;
     border-radius: 50%;
     background: var(--muted);
     flex-shrink: 0;
+    transition: background 0.2s, transform 0.2s;
   }
-  .chat-item.active .chat-item-dot { background: var(--accent-soft); }
+  .chat-item.active .chat-item-dot { background: var(--accent-soft); transform: scale(1.2); }
 
   .chat-item-title {
     flex: 1;
@@ -413,14 +426,15 @@
   .chat-item-delete:hover { color: var(--red); }
 
   .sidebar-footer {
-    padding: 12px 16px;
+    padding: 14px 16px;
     border-top: 1px solid var(--border);
-    display: flex; flex-direction: column; gap: 8px;
+    display: flex; flex-direction: column; gap: 10px;
+    background: linear-gradient(to top, var(--surface2) 0%, transparent 100%);
   }
 
   .theme-selector {
     display: flex;
-    gap: 6px;
+    gap: 7px;
     align-items: center;
     padding: 4px 0;
   }
@@ -436,15 +450,24 @@
     border-radius: 50%;
     border: 2px solid transparent;
     cursor: pointer;
-    transition: border-color 0.15s, transform 0.15s;
+    transition: border-color 0.2s, transform 0.2s, box-shadow 0.2s;
     flex-shrink: 0;
     padding: 0;
   }
-  .theme-dot:hover { transform: scale(1.15); }
-  .theme-dot.active { border-color: var(--fg-bright); }
+  .theme-dot:hover { transform: scale(1.2); box-shadow: 0 0 8px rgba(99,102,241,0.25); }
+  .theme-dot.active { border-color: var(--fg-bright); box-shadow: 0 0 6px rgba(255,255,255,0.1); }
+
+  .shortcut-hints {
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+    font-size: 10px;
+    color: var(--muted);
+    letter-spacing: 0.04em;
+  }
 
   .logout-btn {
-    padding: 6px 10px;
+    padding: 7px 10px;
     background: var(--surface2);
     border: 1px solid var(--border2);
     border-radius: var(--radius);
@@ -452,10 +475,10 @@
     font-family: 'Geist Mono', monospace;
     font-size: 11px;
     cursor: pointer;
-    transition: all 0.15s;
+    transition: all 0.2s;
     text-align: center;
   }
-  .logout-btn:hover { border-color: var(--accent); color: var(--accent-soft); }
+  .logout-btn:hover { border-color: var(--red); color: var(--red); background: var(--red-soft); }
 
   .sidebar-open-btn {
     position: fixed;
