@@ -46,6 +46,7 @@ from routes.conversations import router as conversations_router
 from routes.admin import router as admin_router
 from routes.files import router as files_router
 from routes.usage import router as usage_router
+from routes.schedules import router as schedules_router
 from commands.registry import get_command, list_commands, load_commands
 from core.project_config import load_project_config
 from core.rules import load_rules, get_active_rules
@@ -54,6 +55,7 @@ from tools.registry import get_all_tool_schemas, get_tool_schemas
 
 from core.hooks import load_hooks, fire_hooks, has_hooks
 from core.models import resolve_dynamic_content
+from core.plugin_loader import get_plugin_loader
 import tools  # noqa: F401 — triggers tool registration
 
 logger = logging.getLogger(__name__)
@@ -171,6 +173,7 @@ app.include_router(conversations_router)
 app.include_router(admin_router)
 app.include_router(files_router)
 app.include_router(usage_router)
+app.include_router(schedules_router)
 app.mount("/static", StaticFiles(directory=str(_PROJECT_ROOT / "static")), name="static")
 
 # Svelte frontend: serve Vite build assets from frontend/dist/assets/
@@ -205,6 +208,10 @@ async def startup():
         from core.mcp_client import load_mcp_config
         await load_mcp_config(str(project_mcp))
 
+    # Start the scheduler
+    from core.scheduler import start_scheduler
+    await start_scheduler()
+
 
 @app.on_event("shutdown")
 async def shutdown():
@@ -213,6 +220,9 @@ async def shutdown():
     await get_plugin_loader().unload_all()
     from core.mcp_client import get_mcp_manager
     await get_mcp_manager().disconnect_all()
+
+    from core.scheduler import stop_scheduler
+    await stop_scheduler()
 
     await shutdown_job_queue()
     await shutdown_redis()
@@ -630,6 +640,10 @@ async def websocket_endpoint(ws: WebSocket):
         except Exception:
             pass  # connection may have closed
 
+    # Register this session for scheduler notifications
+    from core.scheduler import register_user_sender, unregister_user_sender
+    register_user_sender(user_id, send_event)
+
     # Register notification callbacks for background tasks and task list updates
     from tools.background import set_notification_callback
     from tools.tasks import set_task_notify_callback
@@ -650,6 +664,10 @@ async def websocket_endpoint(ws: WebSocket):
     ] + [
         {"name": c.name, "description": c.description, "argument_hint": c.argument_hint}
         for c in list_commands()
+    ] + [
+        {"name": "context", "description": "Show context window usage breakdown", "argument_hint": ""},
+        {"name": "plugin", "description": "Install, list, update, or uninstall plugins", "argument_hint": "install|list|update|uninstall <name-or-url>"},
+        {"name": "schedule", "description": "Create, list, enable, disable, or delete scheduled agent tasks", "argument_hint": "create|list|enable|disable|delete|runs|run"},
     ]
     await send_event("connected", {
         "session_id": session_id,
@@ -863,11 +881,355 @@ async def websocket_endpoint(ws: WebSocket):
                 await fire_hooks("SessionEnd", {"session_id": session_id, "user_id": user_id})
             except Exception:
                 pass
+        # Unregister scheduler notifications
+        unregister_user_sender(user_id, send_event)
         # Clean up checkpoints
         from core.checkpoints import clear_checkpoints
         clear_checkpoints(session_id)
         await destroy_session_async(session_id)
         session_closed()
+
+
+async def _handle_plugin_command(args: str) -> str:
+    """Handle /plugin install|list|uninstall commands."""
+    import shutil
+    import subprocess as _sp
+
+    parts = args.strip().split(None, 1)
+    subcommand = parts[0].lower() if parts else ""
+    sub_args = parts[1].strip() if len(parts) > 1 else ""
+    loader = get_plugin_loader()
+    plugins_dir = _PROJECT_ROOT / "plugins"
+    plugins_dir.mkdir(exist_ok=True)
+
+    if subcommand == "install":
+        if not sub_args:
+            return "Usage: `/plugin install <github-url-or-path>`"
+
+        source = sub_args
+        # Local path
+        local_path = Path(source).expanduser()
+        if local_path.exists() and local_path.is_dir():
+            manifest = local_path / ".claude-plugin" / "plugin.json"
+            if not manifest.exists():
+                return f"No `.claude-plugin/plugin.json` found in `{source}`"
+            info = await loader.load_plugin(local_path)
+            if info:
+                return (
+                    f"**Plugin installed from local path**\n\n"
+                    f"- **Name:** {info.name}\n"
+                    f"- **Version:** {info.version}\n"
+                    f"- **Description:** {info.description}\n"
+                    f"- **Skills:** {', '.join(info.skills) or 'none'}\n"
+                    f"- **Commands:** {', '.join(info.commands) or 'none'}\n"
+                    f"- **MCP servers:** {', '.join(info.mcp_servers) or 'none'}"
+                )
+            return f"Failed to load plugin from `{source}`"
+
+        # Git URL — clone into plugins/
+        # Accept github shorthand: owner/repo
+        url = source
+        if "/" in source and not source.startswith(("http://", "https://", "git@")):
+            url = f"https://github.com/{source}.git"
+        elif source.startswith(("http://", "https://")) and not source.endswith(".git"):
+            url = source + ".git"
+
+        # Derive directory name from URL
+        repo_name = url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
+        target_dir = plugins_dir / repo_name
+
+        if target_dir.exists():
+            # Pull latest
+            try:
+                proc = _sp.run(
+                    ["git", "-C", str(target_dir), "pull", "--ff-only"],
+                    capture_output=True, text=True, timeout=60,
+                )
+                if proc.returncode != 0:
+                    return f"Failed to update `{repo_name}`:\n```\n{proc.stderr.strip()}\n```"
+            except Exception as e:
+                return f"Failed to update `{repo_name}`: {e}"
+        else:
+            # Clone
+            try:
+                proc = _sp.run(
+                    ["git", "clone", "--depth", "1", url, str(target_dir)],
+                    capture_output=True, text=True, timeout=120,
+                )
+                if proc.returncode != 0:
+                    return f"Failed to clone `{url}`:\n```\n{proc.stderr.strip()}\n```"
+            except Exception as e:
+                return f"Failed to clone `{url}`: {e}"
+
+        # Validate manifest exists
+        manifest = target_dir / ".claude-plugin" / "plugin.json"
+        if not manifest.exists():
+            shutil.rmtree(target_dir, ignore_errors=True)
+            return f"Cloned `{repo_name}` but no `.claude-plugin/plugin.json` found. Removed."
+
+        # Load the plugin
+        info = await loader.load_plugin(target_dir)
+        if not info:
+            return f"Cloned `{repo_name}` but failed to load plugin."
+
+        return (
+            f"**Plugin installed**\n\n"
+            f"- **Name:** {info.name}\n"
+            f"- **Version:** {info.version}\n"
+            f"- **Description:** {info.description}\n"
+            f"- **Skills:** {', '.join(info.skills) or 'none'}\n"
+            f"- **Commands:** {', '.join(info.commands) or 'none'}\n"
+            f"- **MCP servers:** {', '.join(info.mcp_servers) or 'none'}"
+        )
+
+    elif subcommand == "list":
+        plugins = loader.list_plugins()
+        if not plugins:
+            return "No plugins installed."
+        lines = ["**Installed plugins**\n"]
+        for p in plugins:
+            lines.append(
+                f"- **{p.name}** v{p.version} — {p.description or 'no description'}\n"
+                f"  Skills: {', '.join(p.skills) or 'none'} | "
+                f"Commands: {', '.join(p.commands) or 'none'} | "
+                f"MCP: {', '.join(p.mcp_servers) or 'none'}"
+            )
+        return "\n".join(lines)
+
+    elif subcommand in ("uninstall", "remove"):
+        if not sub_args:
+            return "Usage: `/plugin uninstall <name>`"
+
+        name = sub_args
+        info = loader.get_plugin(name)
+        if not info:
+            return f"Plugin `{name}` not found. Use `/plugin list` to see installed plugins."
+
+        plugin_path = info.path
+        await loader.unload_plugin(name)
+
+        # Remove directory if it's inside our plugins folder
+        try:
+            if plugin_path.is_relative_to(plugins_dir):
+                shutil.rmtree(plugin_path, ignore_errors=True)
+                return f"Plugin `{name}` uninstalled and removed from disk."
+            else:
+                return f"Plugin `{name}` unloaded. Directory `{plugin_path}` left in place (external path)."
+        except Exception as e:
+            return f"Plugin `{name}` unloaded but failed to remove directory: {e}"
+
+    elif subcommand == "update":
+        if not sub_args:
+            return "Usage: `/plugin update <name>`"
+
+        name = sub_args
+        info = loader.get_plugin(name)
+        if not info:
+            return f"Plugin `{name}` not found."
+
+        plugin_path = info.path
+        if not (plugin_path / ".git").exists():
+            return f"Plugin `{name}` is not a git repo, cannot update."
+
+        # Pull latest
+        try:
+            proc = _sp.run(
+                ["git", "-C", str(plugin_path), "pull", "--ff-only"],
+                capture_output=True, text=True, timeout=60,
+            )
+            if proc.returncode != 0:
+                return f"Failed to update `{name}`:\n```\n{proc.stderr.strip()}\n```"
+        except Exception as e:
+            return f"Failed to update `{name}`: {e}"
+
+        # Reload
+        await loader.unload_plugin(name)
+        new_info = await loader.load_plugin(plugin_path)
+        if not new_info:
+            return f"Updated `{name}` but failed to reload."
+
+        return (
+            f"**Plugin updated**\n\n"
+            f"- **Name:** {new_info.name}\n"
+            f"- **Version:** {new_info.version}\n"
+            f"- **Description:** {new_info.description}\n"
+            f"- **Skills:** {', '.join(new_info.skills) or 'none'}\n"
+            f"- **Commands:** {', '.join(new_info.commands) or 'none'}\n"
+            f"- **MCP servers:** {', '.join(new_info.mcp_servers) or 'none'}"
+        )
+
+    else:
+        return (
+            "**Plugin commands**\n\n"
+            "- `/plugin install <github-url-or-owner/repo>` — install from GitHub\n"
+            "- `/plugin install <local-path>` — install from local directory\n"
+            "- `/plugin list` — show installed plugins\n"
+            "- `/plugin update <name>` — pull latest and reload\n"
+            "- `/plugin uninstall <name>` — remove a plugin"
+        )
+
+
+async def _handle_schedule_command(args: str, user_id: str) -> str:
+    """Handle /schedule create|list|enable|disable|delete|runs|run commands."""
+    from croniter import croniter
+    from core.schedule_crud import (
+        create_schedule, list_schedules, resolve_schedule,
+        update_schedule, delete_schedule, get_schedule_runs,
+        trigger_schedule_now,
+    )
+
+    parts = args.strip().split(None, 1)
+    subcommand = parts[0].lower() if parts else ""
+    sub_args = parts[1].strip() if len(parts) > 1 else ""
+
+    if subcommand == "create":
+        # Parse: "name" "cron" prompt text
+        # Or: name cron prompt text
+        import shlex
+        try:
+            tokens = shlex.split(sub_args)
+        except ValueError:
+            tokens = sub_args.split()
+
+        if len(tokens) < 3:
+            return (
+                "Usage: `/schedule create <name> <cron> <prompt>`\n\n"
+                "Examples:\n"
+                "- `/schedule create \"Morning Brief\" \"0 9 * * *\" Summarize overnight market moves`\n"
+                "- `/schedule create \"Hourly Check\" \"0 * * * *\" Check portfolio risk metrics`"
+            )
+
+        name = tokens[0]
+        cron_expr = tokens[1]
+        prompt = " ".join(tokens[2:])
+
+        if not croniter.is_valid(cron_expr):
+            return (
+                f"Invalid cron expression: `{cron_expr}`\n\n"
+                "Format: `minute hour day month weekday`\n"
+                "Examples: `0 9 * * *` (daily 9am), `*/30 * * * *` (every 30 min), `0 9 * * 1` (Mondays 9am)"
+            )
+
+        try:
+            sched = await create_schedule(user_id, name, cron_expr, prompt)
+        except Exception as e:
+            return f"Failed to create schedule: {e}"
+
+        next_run = sched.next_run_at.strftime("%Y-%m-%d %H:%M UTC") if sched.next_run_at else "unknown"
+        return (
+            f"**Schedule created**\n\n"
+            f"- **Name:** {sched.name}\n"
+            f"- **Cron:** `{sched.cron_expression}`\n"
+            f"- **Prompt:** {sched.prompt}\n"
+            f"- **Next run:** {next_run}"
+        )
+
+    elif subcommand == "list":
+        schedules = await list_schedules(user_id)
+        if not schedules:
+            return "No schedules. Use `/schedule create` to add one."
+        lines = ["**Scheduled tasks**\n"]
+        for s in schedules:
+            status = "enabled" if s.enabled else "disabled"
+            next_run = s.next_run_at.strftime("%Y-%m-%d %H:%M UTC") if s.next_run_at else "n/a"
+            last_run = s.last_run_at.strftime("%Y-%m-%d %H:%M UTC") if s.last_run_at else "never"
+            lines.append(
+                f"- **{s.name}** ({status})\n"
+                f"  Cron: `{s.cron_expression}` | Next: {next_run} | Last: {last_run}\n"
+                f"  Prompt: {s.prompt[:100]}{'...' if len(s.prompt) > 100 else ''}"
+            )
+        return "\n".join(lines)
+
+    elif subcommand == "enable":
+        if not sub_args:
+            return "Usage: `/schedule enable <name>`"
+        sched = await resolve_schedule(sub_args, user_id)
+        if not sched:
+            return f"Schedule `{sub_args}` not found."
+        await update_schedule(sched.id, user_id, enabled=True)
+        return f"Schedule `{sched.name}` enabled."
+
+    elif subcommand == "disable":
+        if not sub_args:
+            return "Usage: `/schedule disable <name>`"
+        sched = await resolve_schedule(sub_args, user_id)
+        if not sched:
+            return f"Schedule `{sub_args}` not found."
+        await update_schedule(sched.id, user_id, enabled=False)
+        return f"Schedule `{sched.name}` disabled."
+
+    elif subcommand == "delete":
+        if not sub_args:
+            return "Usage: `/schedule delete <name>`"
+        sched = await resolve_schedule(sub_args, user_id)
+        if not sched:
+            return f"Schedule `{sub_args}` not found."
+        await delete_schedule(sched.id, user_id)
+        return f"Schedule `{sched.name}` deleted."
+
+    elif subcommand == "runs":
+        if not sub_args:
+            return "Usage: `/schedule runs <name>`"
+        sched = await resolve_schedule(sub_args, user_id)
+        if not sched:
+            return f"Schedule `{sub_args}` not found."
+        runs = await get_schedule_runs(sched.id, user_id, limit=10)
+        if not runs:
+            return f"No runs yet for `{sched.name}`."
+        lines = [f"**Recent runs for {sched.name}**\n"]
+        for r in runs:
+            started = r.started_at.strftime("%Y-%m-%d %H:%M UTC")
+            duration = ""
+            if r.finished_at:
+                secs = (r.finished_at - r.started_at).total_seconds()
+                duration = f" ({secs:.0f}s)"
+            preview = ""
+            if r.result:
+                preview = f"\n  Result: {r.result[:120]}{'...' if len(r.result) > 120 else ''}"
+            elif r.error:
+                preview = f"\n  Error: {r.error[:120]}{'...' if len(r.error) > 120 else ''}"
+            lines.append(f"- **{r.status}** at {started}{duration}{preview}")
+        return "\n".join(lines)
+
+    elif subcommand == "run":
+        if not sub_args:
+            return "Usage: `/schedule run <name>`"
+        sched = await resolve_schedule(sub_args, user_id)
+        if not sched:
+            return f"Schedule `{sub_args}` not found."
+        await trigger_schedule_now(sched.id, user_id)
+        return f"Triggered `{sched.name}`. You'll get a notification when it completes."
+
+    else:
+        return (
+            "**Schedule commands**\n\n"
+            "- `/schedule create <name> <cron> <prompt>` -- create a scheduled task\n"
+            "- `/schedule list` -- show all schedules\n"
+            "- `/schedule enable <name>` -- enable a schedule\n"
+            "- `/schedule disable <name>` -- disable a schedule\n"
+            "- `/schedule delete <name>` -- delete a schedule\n"
+            "- `/schedule runs <name>` -- show recent run history\n"
+            "- `/schedule run <name>` -- trigger immediately\n\n"
+            "**Cron format:** `minute hour day month weekday`\n\n"
+            "| Pattern | Meaning |\n"
+            "|---|---|\n"
+            "| `0 9 * * *` | Daily at 9:00 AM |\n"
+            "| `*/30 * * * *` | Every 30 minutes |\n"
+            "| `0 9 * * 1-5` | Weekdays at 9:00 AM |\n"
+            "| `0 9 * * 1` | Mondays at 9:00 AM |\n"
+            "| `0 */6 * * *` | Every 6 hours |\n"
+            "| `0 0 1 * *` | First of each month |\n\n"
+            "**Examples**\n\n"
+            "```\n"
+            "/schedule create \"Morning Brief\" \"0 9 * * 1-5\" Summarize overnight market moves, key economic data releases, and any notable earnings\n"
+            "/schedule create \"Risk Report\" \"0 */6 * * *\" Run VaR and CVaR on current portfolio positions and flag any breaches\n"
+            "/schedule create \"Paper Digest\" \"0 8 * * 1\" Search for new research papers on stochastic volatility and summarize findings\n"
+            "/schedule create \"Data Refresh\" \"0 7 * * 1-5\" /analyze portfolio.csv\n"
+            "/schedule create \"Weekly Charts\" \"0 9 * * 1\" /chart weekly performance across all tracked indices\n"
+            "```\n\n"
+            "Prompts starting with `/` will use the matching skill or command. "
+            "Plain text prompts run a general-purpose agent with full tool access."
+        )
 
 
 async def _generate_title(messages: list[dict[str, Any]]) -> str:
@@ -1018,6 +1380,34 @@ async def _handle_user_message(
             ]
             await send_event("text_delta", {"text": "\n".join(lines)})
             await send_event("response_end", {})
+            return
+
+        # Built-in: /plugin — install, list, uninstall plugins
+        if slash_name == "plugin":
+            result = await _handle_plugin_command(args)
+            await send_event("text_delta", {"text": result})
+            # Refresh skills list in client after install/uninstall/update
+            sub = args.strip().split()[0].lower() if args.strip() else ""
+            if sub in ("install", "uninstall", "remove", "update"):
+                refreshed = [
+                    {"name": s.name, "description": s.description, "argument_hint": s.argument_hint}
+                    for s in list_skills() if s.user_invocable
+                ] + [
+                    {"name": c.name, "description": c.description, "argument_hint": c.argument_hint}
+                    for c in list_commands()
+                ] + [
+                    {"name": "context", "description": "Show context window usage breakdown", "argument_hint": ""},
+                    {"name": "plugin", "description": "Install, list, update, or uninstall plugins", "argument_hint": "install|list|update|uninstall <name-or-url>"},
+                ]
+                await send_event("skills_updated", {"skills": refreshed})
+            await send_event("turn_complete", {})
+            return
+
+        # Built-in: /schedule -- manage scheduled agent tasks
+        if slash_name == "schedule":
+            result = await _handle_schedule_command(args, user_id)
+            await send_event("text_delta", {"text": result})
+            await send_event("turn_complete", {})
             return
 
         # 1. Try skill first (modern standard)

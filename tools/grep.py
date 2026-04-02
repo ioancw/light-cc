@@ -25,7 +25,7 @@ async def handle_grep(tool_input: dict[str, Any]) -> str:
         return json.dumps({"error": f"Invalid regex: {e}"})
 
     from core.sandbox import validate_tool_path
-    root, err = validate_tool_path(search_path)
+    root, err = validate_tool_path(search_path, read_only=True)
     if err:
         return err
 

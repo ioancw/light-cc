@@ -23,7 +23,10 @@
   }
 
   function updateAutocomplete() {
-    const skills = appState.skills || [];
+    const allSkills = appState.skills || [];
+    // Deduplicate by name (skills + commands can overlap)
+    const seen = new Set();
+    const skills = allSkills.filter(s => { if (seen.has(s.name)) return false; seen.add(s.name); return true; });
     if (!textareaEl || skills.length === 0) { hideAutocomplete(); return; }
 
     const cursorPos = textareaEl.selectionStart;
@@ -190,7 +193,7 @@
     ondragenter={onDragEnter} ondragover={onDragOver} ondragleave={onDragLeave} ondrop={onDrop}>
     {#if acVisible && acMatches.length > 0}
       <div class="autocomplete-dropdown">
-        {#each acMatches as skill, i (skill.name)}
+        {#each acMatches as skill, i (i)}
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <!-- svelte-ignore a11y_no_static_element_interactions -->
           <div

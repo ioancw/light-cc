@@ -209,6 +209,10 @@ function handleEvent(type, data) {
       showToast(data.message || 'Notification', data.level === 'error' ? 'error' : 'info');
       break;
 
+    case 'skills_updated':
+      appState.skills = data.skills || [];
+      break;
+
     case 'skill_activated':
       appState.inlineStatus = { message: `skill: ${data.name || 'unknown'}`, type: 'info' };
       setTimeout(() => {
@@ -216,6 +220,12 @@ function handleEvent(type, data) {
           appState.inlineStatus = null;
         }
       }, 4000);
+      break;
+
+    case 'response_end':
+      if (msg) msg.streaming = false;
+      appState.isStreaming = false;
+      appState.inlineStatus = null;
       break;
 
     case 'generation_cancelled':
@@ -269,8 +279,38 @@ function handleEvent(type, data) {
             c.title = data.title;
           }
         }
+        // Also update the server conversations list so History shows correct titles
+        for (const sc of (appState.serverConversations || [])) {
+          if (sc.id === data.conversation_id) {
+            sc.title = data.title;
+          }
+        }
       }
       break;
+
+    case 'schedule_result': {
+      const convId = data.conversation_id;
+      const sname = data.schedule_name || 'Scheduled task';
+      const slabel = data.status === 'completed' ? 'completed' : 'failed';
+      showToast(`${sname} ${slabel} -- click to view`, slabel === 'failed' ? 'error' : 'info');
+      // Refresh server conversations so the new one appears in the sidebar
+      fetchConversationHistory();
+      // If the user isn't mid-conversation, switch to the result
+      if (convId && !appState.isStreaming) {
+        const localId = 'conv_' + Date.now();
+        appState.conversations[localId] = {
+          id: localId,
+          serverId: convId,
+          title: `[Scheduled] ${sname}`,
+          messages: [],
+          createdAt: Date.now(),
+          titleGenerated: true,
+        };
+        appState.currentId = localId;
+        send('resume_conversation', { conversation_id: convId });
+      }
+      break;
+    }
 
     case 'context_summarized':
       appState.totalTokens = 0;

@@ -36,12 +36,12 @@ export function generateId(prefix = 'id') {
   return prefix + '_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
 }
 
-// Friendly model label: "claude-sonnet-4-6-20250514" -> "Sonnet 4.6"
+// Friendly model label: "claude-sonnet-4-5-latest" -> "Sonnet 4.5"
 export function modelLabel(modelId) {
   const parts = modelId.split('-');
   if (parts[0] === 'claude' && parts.length >= 3) {
     const family = parts[1].charAt(0).toUpperCase() + parts[1].slice(1);
-    const ver = parts.slice(2).filter(p => !/^\d{8}$/.test(p)).join('.');
+    const ver = parts.slice(2).filter(p => !/^\d{8}$/.test(p) && p !== 'latest').join('.');
     return family + (ver ? ' ' + ver : '');
   }
   return modelId;

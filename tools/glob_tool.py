@@ -17,7 +17,7 @@ async def handle_glob(tool_input: dict[str, Any]) -> str:
         return json.dumps({"error": "No pattern provided"})
 
     from core.sandbox import validate_tool_path
-    root, err = validate_tool_path(search_path)
+    root, err = validate_tool_path(search_path, read_only=True)
     if err:
         return err
 

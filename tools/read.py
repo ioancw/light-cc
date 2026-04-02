@@ -15,7 +15,7 @@ async def handle_read(tool_input: dict[str, Any]) -> str:
         return json.dumps({"error": "No file_path provided"})
 
     from core.sandbox import validate_tool_path
-    path, err = validate_tool_path(file_path)
+    path, err = validate_tool_path(file_path, read_only=True)
     if err:
         return err
 

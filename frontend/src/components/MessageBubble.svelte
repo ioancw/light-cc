@@ -28,6 +28,20 @@
     send('fork_conversation', {});
   }
 
+  // Split streaming "thinking aloud" text into bullet points for readability.
+  // Only applies to streaming content that lacks markdown structure (no headers,
+  // lists, or code blocks). Splits on sentence boundaries.
+  function bulletizeStreaming(text) {
+    if (!text) return text;
+    // Don't touch content that already has markdown structure
+    if (/^[\s]*[#\-*>`|]|```/m.test(text)) return text;
+    // Split on sentence boundaries: period/exclamation/question followed by
+    // a capital letter or common transition phrase
+    const sentences = text.split(/(?<=\.)\s+(?=[A-Z])/).filter(s => s.trim());
+    if (sentences.length <= 1) return text;
+    return sentences.map(s => `- ${s.trim()}`).join('\n');
+  }
+
   function handleCopyClick(e) {
     const btn = e.target.closest('.copy-btn[data-code]');
     if (!btn) return;
@@ -80,7 +94,7 @@
       {#if msg.role === 'user'}
         {@html escapeHtml(msg.content).replace(/\n/g, '<br>')}
       {:else if msg.content}
-        {@html renderMarkdown(msg.content)}
+        {@html renderMarkdown(msg.toolCalls?.length ? bulletizeStreaming(msg.content) : msg.content)}
         {#if msg.streaming}
           <span class="cursor-blink"></span>
         {/if}
@@ -189,10 +203,10 @@
   .msg-action-btn:hover { border-color: var(--border2); color: var(--fg-dim); background: var(--surface2); }
 
   .tool-calls-container {
-    margin: 10px 0;
+    margin: 6px 0;
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 3px;
   }
 
   /* Prose is styled globally in global.css */

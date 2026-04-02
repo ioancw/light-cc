@@ -7,7 +7,7 @@
 
   // Track message count to trigger auto-scroll
   let messageCount = $derived(currentConversation()?.messages?.length || 0);
-  let lastStreamContent = $derived(() => {
+  let lastStreamContent = $derived.by(() => {
     const msgs = currentConversation()?.messages;
     if (!msgs || msgs.length === 0) return '';
     const last = msgs[msgs.length - 1];

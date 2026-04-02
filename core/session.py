@@ -136,15 +136,12 @@ async def save_conversation(session_id: str) -> str | None:
             conv_id = conv.id
             session["conversation_id"] = conv_id
         else:
-            # Update existing conversation timestamp, title, and model
+            # Update existing conversation timestamp and model (preserve title)
             from sqlalchemy import select, update
             await db.execute(
                 update(Conversation)
                 .where(Conversation.id == conv_id)
-                .values(
-                    title=_derive_title(session["messages"]),
-                    model=active_model,
-                )
+                .values(model=active_model)
             )
             # Delete old messages and re-insert (simpler than diffing)
             from sqlalchemy import delete

@@ -73,3 +73,39 @@ class UsageEvent(Base):
     output_tokens: Mapped[int] = mapped_column(Integer, default=0)
     cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class Schedule(Base):
+    __tablename__ = "schedules"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_new_id)
+    user_id: Mapped[str] = mapped_column(String(32), ForeignKey("users.id"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    cron_expression: Mapped[str] = mapped_column(String(100), nullable=False)
+    prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+
+    runs: Mapped[list["ScheduleRun"]] = relationship(
+        back_populates="schedule", cascade="all, delete-orphan",
+        order_by="ScheduleRun.started_at.desc()",
+    )
+
+
+class ScheduleRun(Base):
+    __tablename__ = "schedule_runs"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_new_id)
+    schedule_id: Mapped[str] = mapped_column(String(32), ForeignKey("schedules.id"), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="running")
+    result: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    tokens_used: Mapped[int] = mapped_column(Integer, default=0)
+    conversation_id: Mapped[str | None] = mapped_column(String(32), ForeignKey("conversations.id"), nullable=True)
+
+    schedule: Mapped["Schedule"] = relationship(back_populates="runs")

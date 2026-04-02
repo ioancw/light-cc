@@ -54,9 +54,9 @@ class Settings(BaseModel):
     jwt_secret: str = Field(default_factory=lambda: os.environ.get("JWT_SECRET", "change-me-in-production"))
     jwt_algorithm: str = "HS256"
     available_models: list[str] = Field(default_factory=lambda: [
-        "claude-sonnet-4-6-20250514",
+        "claude-sonnet-4-6",
         "claude-haiku-4-5-20251001",
-        "claude-opus-4-0-20250514",
+        "claude-opus-4-6",
     ])
     # Project directory for CLAUDE.md and .claude/rules/ discovery
     project_dir: str | None = None  # defaults to CWD at runtime

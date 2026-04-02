@@ -58,6 +58,19 @@ export async function fetchConversationHistory(query) {
   }
 }
 
+export async function renameConversation(serverId, title) {
+  if (!appState.authToken || !serverId) return;
+  try {
+    await fetch(`/api/conversations/${serverId}`, {
+      method: 'PATCH',
+      headers: authHeaders(),
+      body: JSON.stringify({ title }),
+    });
+  } catch {
+    // silently ignore
+  }
+}
+
 export async function deleteServerConversation(serverId) {
   if (!appState.authToken) return;
   try {

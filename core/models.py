@@ -29,16 +29,25 @@ class ToolResult(BaseModel):
 
 
 class SkillDef(BaseModel):
-    """A skill parsed from a SKILL.md file (Claude Code format).
+    """A skill parsed from a SKILL.md file.
+
+    Compliant with the agentskills.io open standard (https://agentskills.io/specification)
+    plus Claude Code extensions (argument-hint, disable-model-invocation, etc.).
 
     Skills are the primary abstraction in Claude Code/Cowork.
     They can be user-invoked (/name) and/or auto-invoked by Claude.
     """
 
+    # --- agentskills.io standard fields ---
     name: str
     description: str = ""
+    license: str = ""  # License name or reference to bundled LICENSE file
+    compatibility: str = ""  # Environment requirements (max 500 chars per spec)
+    metadata: dict[str, str] = Field(default_factory=dict)  # Arbitrary key-value pairs
+    tools: list[str] = Field(default_factory=list)  # allowed-tools (spec: space-delimited)
+
+    # --- Claude Code extension fields ---
     argument_hint: str = ""  # Autocomplete hint, e.g. "[filename] [format]"
-    tools: list[str] = Field(default_factory=list)  # allowed-tools
     disable_model_invocation: bool = False  # If true, only user can invoke via /name
     user_invocable: bool = True  # If false, hidden from / menu, only Claude can use
     model: str = ""  # Model override when this skill is active

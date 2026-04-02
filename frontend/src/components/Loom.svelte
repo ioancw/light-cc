@@ -58,14 +58,35 @@
     }
   }
 
-  function onModelChange(e) {
-    const model = e.target.value;
+  function selectModel(model) {
     if (model) {
       send('set_model', { model });
       localStorage.setItem('lcc_model', model);
       appState.currentModel = model;
     }
+    modelDropdownOpen = false;
   }
+
+  // Custom model dropdown
+  let modelDropdownOpen = $state(false);
+  let modelDropdownEl = $state(null);
+
+  function toggleModelDropdown() {
+    modelDropdownOpen = !modelDropdownOpen;
+  }
+
+  function onClickOutsideModel(e) {
+    if (modelDropdownEl && !modelDropdownEl.contains(e.target)) {
+      modelDropdownOpen = false;
+    }
+  }
+
+  $effect(() => {
+    if (modelDropdownOpen) {
+      document.addEventListener('click', onClickOutsideModel, true);
+      return () => document.removeEventListener('click', onClickOutsideModel, true);
+    }
+  });
 
   let topbarTitle = $derived(currentConversation()?.title || 'New conversation');
 </script>
@@ -82,11 +103,34 @@
             <path d="M2 3h4l2 2h6v8H2V3z" stroke="currentColor" stroke-width="1.3" fill="none"/>
           </svg>
         </button>
-        <select class="model-selector" value={appState.currentModel} onchange={onModelChange}>
-          {#each appState.availableModels as model (model)}
-            <option value={model}>{modelLabel(model)}</option>
-          {/each}
-        </select>
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div class="model-dropdown" bind:this={modelDropdownEl}>
+          <button class="model-trigger" onclick={toggleModelDropdown} class:open={modelDropdownOpen}>
+            <span>{modelLabel(appState.currentModel) || 'Model'}</span>
+            <svg class="model-chevron" width="8" height="8" viewBox="0 0 10 10" fill="none">
+              <path d="M2 4l3 3 3-3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
+          {#if modelDropdownOpen}
+            <div class="model-menu">
+              {#each appState.availableModels as model (model)}
+                <div
+                  class="model-option"
+                  class:selected={model === appState.currentModel}
+                  onclick={() => selectModel(model)}
+                >
+                  <span class="model-option-label">{modelLabel(model)}</span>
+                  {#if model === appState.currentModel}
+                    <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
+                      <path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                  {/if}
+                </div>
+              {/each}
+            </div>
+          {/if}
+        </div>
       </div>
     </div>
 
@@ -168,21 +212,83 @@
     transform: translateY(-1px);
   }
 
-  .model-selector {
+  .model-dropdown {
+    position: relative;
+  }
+
+  .model-trigger {
     background: var(--surface2);
     border: 1px solid var(--border2);
     border-radius: 5px;
     color: var(--fg-dim);
     font-size: 11px;
-    padding: 5px 8px;
-    outline: none;
+    padding: 5px 10px;
     cursor: pointer;
     font-family: 'Geist Mono', monospace;
-    transition: border-color 0.2s, box-shadow 0.2s;
+    letter-spacing: 0.03em;
+    transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
+    display: flex;
+    align-items: center;
+    gap: 6px;
   }
-  .model-selector:hover { border-color: var(--muted); }
-  .model-selector:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-glow); }
-  .model-selector option { background: var(--surface); color: var(--fg); }
+  .model-trigger:hover {
+    border-color: var(--muted);
+    background: var(--surface);
+  }
+  .model-trigger.open {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-glow);
+  }
+  .model-chevron {
+    transition: transform 0.2s ease;
+  }
+  .model-trigger.open .model-chevron {
+    transform: rotate(180deg);
+  }
+
+  .model-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    min-width: 180px;
+    background: var(--surface);
+    border: 1px solid var(--border2);
+    border-radius: 6px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+    z-index: 200;
+    overflow: hidden;
+    animation: dropdown-in 0.15s ease;
+  }
+  @keyframes dropdown-in {
+    from { opacity: 0; transform: translateY(-4px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .model-option {
+    padding: 8px 14px;
+    font-size: 11px;
+    font-family: 'Geist Mono', monospace;
+    letter-spacing: 0.03em;
+    color: var(--fg-dim);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    transition: background 0.1s ease;
+    border-bottom: 1px solid color-mix(in srgb, var(--border) 40%, transparent);
+  }
+  .model-option:last-child { border-bottom: none; }
+  .model-option:hover {
+    background: var(--surface2);
+    color: var(--fg-bright);
+  }
+  .model-option.selected {
+    color: var(--accent-soft);
+  }
+  .model-option.selected svg {
+    color: var(--accent-soft);
+  }
 
   @media (max-width: 768px) {
     .app {
@@ -196,6 +302,7 @@
       max-width: 120px;
     }
     .topbar-actions { gap: 4px; }
-    .model-selector { max-width: 90px; font-size: 10px; }
+    .model-trigger { font-size: 10px; padding: 4px 8px; }
+    .model-menu { min-width: 140px; }
   }
 </style>

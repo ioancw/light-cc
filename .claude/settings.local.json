@@ -38,7 +38,8 @@
       "Bash(npm run:*)",
       "Bash(npx vite:*)",
       "Bash(gh repo:*)",
-      "Bash(git:*)"
+      "Bash(git:*)",
+      "Bash(head:*)"
     ]
   }
 }

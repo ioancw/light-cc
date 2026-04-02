@@ -1,6 +1,6 @@
 <script>
   import { appState, sortedConversations, newConversation, switchConversation } from '../state.svelte.js';
-  import { logout, fetchConversationHistory, deleteServerConversation, importConversation } from '../api.js';
+  import { logout, fetchConversationHistory, deleteServerConversation, importConversation, renameConversation } from '../api.js';
   import { send } from '../ws.js';
   import { THEMES, setTheme } from '../theme.js';
   import { debounce } from '../lib/utils.js';
@@ -22,19 +22,39 @@
     debouncedServerSearch(searchQuery);
   }
 
+  function isScheduled(conv) {
+    return conv.title?.startsWith('[Scheduled]');
+  }
+
+  function displayTitle(conv) {
+    return isScheduled(conv) ? conv.title.replace(/^\[Scheduled\]\s*/, '') : conv.title;
+  }
+
   let filteredLocal = $derived(
-    sortedConversations().filter(c =>
-      !searchQuery || c.title.toLowerCase().includes(searchQuery.toLowerCase())
-    )
+    sortedConversations()
+      .filter(c => !isScheduled(c))
+      .filter(c => !searchQuery || c.title.toLowerCase().includes(searchQuery.toLowerCase()))
+  );
+
+  let filteredLocalScheduled = $derived(
+    sortedConversations()
+      .filter(c => isScheduled(c))
+      .filter(c => !searchQuery || c.title.toLowerCase().includes(searchQuery.toLowerCase()))
   );
 
   let loadedServerIds = $derived(
     new Set(Object.values(appState.conversations).filter(c => c.serverId).map(c => c.serverId))
   );
 
-  let filteredServer = $derived(
+  let serverNonScheduled = $derived(
     (appState.serverConversations || [])
-      .filter(c => !loadedServerIds.has(c.id))
+      .filter(c => !loadedServerIds.has(c.id) && !isScheduled(c))
+      .filter(c => !searchQuery || c.title.toLowerCase().includes(searchQuery.toLowerCase()))
+  );
+
+  let serverScheduled = $derived(
+    (appState.serverConversations || [])
+      .filter(c => !loadedServerIds.has(c.id) && isScheduled(c))
       .filter(c => !searchQuery || c.title.toLowerCase().includes(searchQuery.toLowerCase()))
   );
 
@@ -60,6 +80,7 @@
       title: serverConv ? serverConv.title : 'Resumed conversation',
       messages: [],
       createdAt: Date.now(),
+      titleGenerated: true,
     };
     appState.currentId = id;
     send('resume_conversation', { conversation_id: serverId });
@@ -127,6 +148,58 @@
     appState.sidebarCollapsed = !appState.sidebarCollapsed;
     localStorage.setItem('lcc_sidebar_collapsed', appState.sidebarCollapsed ? '1' : '');
   }
+
+  // Inline rename
+  let renamingId = $state(null);
+  let renameValue = $state('');
+
+  function startRename(conv) {
+    renamingId = conv.id;
+    renameValue = conv.title;
+  }
+
+  function commitRename(conv) {
+    const trimmed = renameValue.trim();
+    if (trimmed && trimmed !== conv.title) {
+      conv.title = trimmed;
+      conv.titleGenerated = true;
+      // Persist to server
+      if (conv.serverId) {
+        renameConversation(conv.serverId, trimmed);
+      }
+    }
+    renamingId = null;
+  }
+
+  function cancelRename() {
+    renamingId = null;
+  }
+
+  // Delete confirmation
+  let confirmingDeleteId = $state(null);
+
+  function requestDelete(id) {
+    confirmingDeleteId = id;
+  }
+
+  function confirmDelete(id) {
+    confirmingDeleteId = null;
+    handleDeleteLocal(id);
+  }
+
+  function cancelDelete() {
+    confirmingDeleteId = null;
+  }
+
+  function renameKeydown(e, conv) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      commitRename(conv);
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      cancelRename();
+    }
+  }
 </script>
 
 <aside class="sidebar" class:collapsed={appState.sidebarCollapsed}>
@@ -174,16 +247,77 @@
         class="chat-item"
         class:active={conv.id === appState.currentId}
         onclick={() => handleSwitchChat(conv.id)}
+        ondblclick={(e) => { e.stopPropagation(); startRename(conv); }}
       >
         <div class="chat-item-dot"></div>
-        <span class="chat-item-title">{conv.title}</span>
-        <button class="chat-item-delete" onclick={(e) => { e.stopPropagation(); handleDeleteLocal(conv.id); }} title="Delete">&times;</button>
+        {#if renamingId === conv.id}
+          <!-- svelte-ignore a11y_autofocus -->
+          <input
+            class="chat-item-rename"
+            type="text"
+            bind:value={renameValue}
+            onkeydown={(e) => renameKeydown(e, conv)}
+            onblur={() => commitRename(conv)}
+            onclick={(e) => e.stopPropagation()}
+            autofocus
+          />
+        {:else if confirmingDeleteId === conv.id}
+          <span class="chat-item-confirm">delete?</span>
+          <button class="chat-item-confirm-btn yes" onclick={(e) => { e.stopPropagation(); confirmDelete(conv.id); }}>yes</button>
+          <button class="chat-item-confirm-btn no" onclick={(e) => { e.stopPropagation(); cancelDelete(); }}>no</button>
+        {:else}
+          <span class="chat-item-title">{conv.title}</span>
+        {/if}
+        {#if confirmingDeleteId !== conv.id}
+          <button class="chat-item-delete" onclick={(e) => { e.stopPropagation(); requestDelete(conv.id); }} title="Delete">&times;</button>
+        {/if}
       </div>
     {/each}
 
-    {#if filteredServer.length > 0}
+    {#if filteredLocalScheduled.length > 0 || serverScheduled.length > 0}
+      <div class="sidebar-section-label" style="margin-top:12px">
+        <svg class="schedule-icon" width="10" height="10" viewBox="0 0 16 16" fill="none">
+          <path d="M5 1v3M11 1v3M3 6h10M2 3h12a1 1 0 011 1v10a1 1 0 01-1 1H2a1 1 0 01-1-1V4a1 1 0 011-1z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M8 8v2.5l1.5 1" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        Scheduled
+      </div>
+      {#each filteredLocalScheduled as conv (conv.id)}
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div
+          class="chat-item scheduled"
+          class:active={conv.id === appState.currentId}
+          onclick={() => handleSwitchChat(conv.id)}
+        >
+          <svg class="chat-item-schedule-icon" width="11" height="11" viewBox="0 0 16 16" fill="none">
+            <circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.3"/>
+            <path d="M8 5v3.5l2.5 1.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span class="chat-item-title">{displayTitle(conv)}</span>
+          <button class="chat-item-delete" onclick={(e) => { e.stopPropagation(); requestDelete(conv.id); }} title="Delete">&times;</button>
+        </div>
+      {/each}
+      {#each serverScheduled as conv (conv.id)}
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div
+          class="chat-item scheduled"
+          onclick={() => handleResumeServer(conv.id)}
+        >
+          <svg class="chat-item-schedule-icon" width="11" height="11" viewBox="0 0 16 16" fill="none">
+            <circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.3"/>
+            <path d="M8 5v3.5l2.5 1.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span class="chat-item-title">{displayTitle(conv)}</span>
+          <button class="chat-item-delete" onclick={(e) => { e.stopPropagation(); handleDeleteServer(conv.id); }} title="Delete">&times;</button>
+        </div>
+      {/each}
+    {/if}
+
+    {#if serverNonScheduled.length > 0}
       <div class="sidebar-section-label" style="margin-top:12px">History</div>
-      {#each filteredServer as conv (conv.id)}
+      {#each serverNonScheduled as conv (conv.id)}
         <!-- svelte-ignore a11y_click_events_have_key_events -->
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <div
@@ -411,6 +545,52 @@
     text-overflow: ellipsis;
   }
 
+  .chat-item-confirm {
+    font-size: 11px;
+    color: var(--red);
+    letter-spacing: 0.05em;
+    flex-shrink: 0;
+  }
+  .chat-item-confirm-btn {
+    background: none;
+    border: 1px solid var(--border2);
+    border-radius: 3px;
+    font-family: 'Geist Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.05em;
+    padding: 1px 8px;
+    cursor: pointer;
+    transition: all 0.12s ease;
+  }
+  .chat-item-confirm-btn.yes {
+    color: var(--red);
+    border-color: color-mix(in srgb, var(--red) 40%, transparent);
+  }
+  .chat-item-confirm-btn.yes:hover {
+    background: var(--red-soft);
+    border-color: var(--red);
+  }
+  .chat-item-confirm-btn.no {
+    color: var(--muted);
+  }
+  .chat-item-confirm-btn.no:hover {
+    color: var(--fg-dim);
+    border-color: var(--muted);
+  }
+
+  .chat-item-rename {
+    flex: 1;
+    background: var(--surface2);
+    border: 1px solid var(--accent);
+    border-radius: 3px;
+    color: var(--fg-bright);
+    font-family: 'Geist Mono', monospace;
+    font-size: 11px;
+    padding: 2px 6px;
+    outline: none;
+    min-width: 0;
+  }
+
   .chat-item-delete {
     opacity: 0;
     flex-shrink: 0;
@@ -424,6 +604,22 @@
   }
   .chat-item:hover .chat-item-delete { opacity: 1; }
   .chat-item-delete:hover { color: var(--red); }
+
+  .chat-item.scheduled { color: var(--muted); }
+  .chat-item.scheduled:hover { color: var(--fg); }
+  .chat-item.scheduled.active { color: var(--fg-bright); }
+
+  .chat-item-schedule-icon {
+    flex-shrink: 0;
+    color: var(--accent-soft);
+    opacity: 0.7;
+  }
+  .chat-item.scheduled.active .chat-item-schedule-icon { opacity: 1; }
+
+  .schedule-icon {
+    vertical-align: -1px;
+    margin-right: 2px;
+  }
 
   .sidebar-footer {
     padding: 14px 16px;
