@@ -28,12 +28,12 @@ async def handle_edit(tool_input: dict[str, Any]) -> str:
         return json.dumps({"error": f"File not found: {file_path}"})
 
     try:
-        # Checkpoint before editing
+        # Checkpoint before editing (keyed by cid for multiplexed conversations)
         from core.checkpoints import snapshot_file
-        from core.session import _current_session_id
-        sid = _current_session_id.get("")
-        if sid:
-            snapshot_file(sid, str(path))
+        from core.session import _current_session_id, _current_cid
+        cp_key = _current_cid.get("") or _current_session_id.get("")
+        if cp_key:
+            snapshot_file(cp_key, str(path))
 
         text = path.read_text(encoding="utf-8")
         replace_all = tool_input.get("replace_all", False)

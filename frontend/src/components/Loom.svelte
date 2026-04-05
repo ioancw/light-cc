@@ -39,7 +39,6 @@
     if (e.ctrlKey && e.key === 'k') {
       e.preventDefault();
       newConversation();
-      send('clear_conversation', {});
       return;
     }
 
@@ -60,7 +59,8 @@
 
   function selectModel(model) {
     if (model) {
-      send('set_model', { model });
+      const conv = currentConversation();
+      send('set_model', { model }, conv?.serverId || conv?.id);
       localStorage.setItem('lcc_model', model);
       appState.currentModel = model;
     }

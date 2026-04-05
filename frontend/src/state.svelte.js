@@ -15,21 +15,19 @@ export const appState = $state({
   // Conversations
   conversations: {},
   currentId: null,
-  serverConversations: [],
 
   // Model
   availableModels: [],
   currentModel: '',
 
-  // Streaming
-  isStreaming: false,
-  totalTokens: 0,
+  // Streaming (per-conversation now -- isStreaming removed, use isCurrentStreaming())
+  totalTokens: 0,  // legacy, prefer conv.totalTokens
 
   // Skills (for slash command autocomplete)
   skills: [],
 
-  // Permission request (null when none pending)
-  pendingPermission: null,
+  // Permission requests keyed by conversation id (supports concurrent agents)
+  pendingPermissions: {},
 
   // Theme
   theme: localStorage.getItem('lcc_theme') || 'midnight',
@@ -58,9 +56,20 @@ export function currentConversation() {
   return appState.currentId ? appState.conversations[appState.currentId] : null;
 }
 
+export function isCurrentStreaming() {
+  const conv = currentConversation();
+  return conv ? conv.messages.some(m => m.streaming) : false;
+}
+
+export function isAnyStreaming() {
+  return Object.values(appState.conversations).some(
+    conv => conv.messages.some(m => m.streaming)
+  );
+}
+
 export function sortedConversations() {
   return Object.values(appState.conversations)
-    .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+    .sort((a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0));
 }
 
 // Helpers to persist auth state
@@ -91,8 +100,10 @@ export function newConversation() {
     title: 'New conversation',
     messages: [],
     createdAt: Date.now(),
+    updatedAt: Date.now(),
     titleGenerated: false,
     pinned: false,
+    totalTokens: 0,
   };
   appState.currentId = id;
   appState.totalTokens = 0;
@@ -113,8 +124,30 @@ export function showToast(message, type = 'info', duration = 2500) {
   }, duration);
 }
 
-export function getStreamingMessage() {
-  const conv = appState.conversations[appState.currentId];
+// Per-conversation permission helpers
+export function setPendingPermission(cid, perm) {
+  appState.pendingPermissions[cid] = perm;
+}
+
+export function clearPendingPermission(cid) {
+  delete appState.pendingPermissions[cid];
+}
+
+export function getPendingPermission(cid) {
+  return appState.pendingPermissions[cid] || null;
+}
+
+// Backward-compat: pendingPermission for the current conversation
+export function pendingPermission() {
+  const id = appState.currentId;
+  if (!id) return null;
+  const conv = appState.conversations[id];
+  const serverId = conv?.serverId;
+  return appState.pendingPermissions[id] || (serverId && appState.pendingPermissions[serverId]) || null;
+}
+
+export function getStreamingMessage(convId = null) {
+  const conv = convId ? appState.conversations[convId] : appState.conversations[appState.currentId];
   if (!conv) return null;
   return conv.messages.find(m => m.streaming);
 }

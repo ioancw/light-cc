@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import random
 import time
 from typing import Any, Awaitable, Callable
 
@@ -66,8 +67,8 @@ async def run(
         from core.session import current_session_get
         _req_uid = current_session_get("user_id") or "default"
         record_request(_req_uid, active_model)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Request metric recording failed: {e}")
 
     while remaining > 0:
         remaining -= 1
@@ -89,76 +90,110 @@ async def run(
         pending_text: list[str] = []
         stream_usage: dict[str, int] | None = None
 
-        async with client.messages.stream(
-            model=active_model,
-            max_tokens=settings.max_tokens,
-            system=system,
-            messages=messages,
-            tools=tools if tools else [],
-        ) as stream:
-            async for event in stream:
-                if event.type == "content_block_start":
-                    block = event.content_block
-                    idx = event.index
-                    if block.type == "text":
-                        text_buffers[idx] = []
-                    elif block.type == "tool_use":
-                        tool_block_map[idx] = {
-                            "id": block.id,
-                            "name": block.name,
-                        }
-                        tool_input_buffers[idx] = []
-
-                elif event.type == "content_block_delta":
-                    delta = event.delta
-                    idx = event.index
-                    if delta.type == "text_delta":
-                        # Buffer text — don't send to UI yet
-                        pending_text.append(delta.text)
-                        if idx in text_buffers:
-                            text_buffers[idx].append(delta.text)
-                    elif delta.type == "input_json_delta":
-                        if idx in tool_input_buffers:
-                            tool_input_buffers[idx].append(delta.partial_json)
-
-                elif event.type == "content_block_stop":
-                    idx = event.index
-                    if idx in text_buffers:
-                        full_text = "".join(text_buffers[idx])
-                        assistant_content.append({"type": "text", "text": full_text})
-                    elif idx in tool_block_map:
-                        raw = "".join(tool_input_buffers.get(idx, []))
-                        try:
-                            parsed_input = json.loads(raw) if raw else {}
-                        except json.JSONDecodeError:
-                            parsed_input = {}
-
-                        info = tool_block_map[idx]
-                        tool_call = {
-                            "id": info["id"],
-                            "name": info["name"],
-                            "input": parsed_input,
-                        }
-                        tool_calls.append(tool_call)
-                        assistant_content.append(
-                            {
-                                "type": "tool_use",
-                                "id": info["id"],
-                                "name": info["name"],
-                                "input": parsed_input,
-                            }
-                        )
-
-            # Capture usage from the final message (inside async with)
+        import anthropic as _anthropic
+        _max_retries = 3
+        for _attempt in range(_max_retries):
             try:
-                final_msg = await stream.get_final_message()
-                if final_msg and final_msg.usage:
-                    stream_usage = {
-                        "input": final_msg.usage.input_tokens,
-                        "output": final_msg.usage.output_tokens,
-                    }
-            except Exception:
-                pass
+                async with client.messages.stream(
+                    model=active_model,
+                    max_tokens=settings.max_tokens,
+                    system=system,
+                    messages=messages,
+                    tools=tools if tools else [],
+                ) as stream:
+                    async for event in stream:
+                        if event.type == "content_block_start":
+                            block = event.content_block
+                            idx = event.index
+                            if block.type == "text":
+                                text_buffers[idx] = []
+                            elif block.type == "tool_use":
+                                tool_block_map[idx] = {
+                                    "id": block.id,
+                                    "name": block.name,
+                                }
+                                tool_input_buffers[idx] = []
+
+                        elif event.type == "content_block_delta":
+                            delta = event.delta
+                            idx = event.index
+                            if delta.type == "text_delta":
+                                # Buffer text — don't send to UI yet
+                                pending_text.append(delta.text)
+                                if idx in text_buffers:
+                                    text_buffers[idx].append(delta.text)
+                            elif delta.type == "input_json_delta":
+                                if idx in tool_input_buffers:
+                                    tool_input_buffers[idx].append(delta.partial_json)
+
+                        elif event.type == "content_block_stop":
+                            idx = event.index
+                            if idx in text_buffers:
+                                full_text = "".join(text_buffers[idx])
+                                assistant_content.append({"type": "text", "text": full_text})
+                            elif idx in tool_block_map:
+                                raw = "".join(tool_input_buffers.get(idx, []))
+                                try:
+                                    parsed_input = json.loads(raw) if raw else {}
+                                except json.JSONDecodeError:
+                                    parsed_input = {}
+
+                                info = tool_block_map[idx]
+                                tool_call = {
+                                    "id": info["id"],
+                                    "name": info["name"],
+                                    "input": parsed_input,
+                                }
+                                tool_calls.append(tool_call)
+                                assistant_content.append(
+                                    {
+                                        "type": "tool_use",
+                                        "id": info["id"],
+                                        "name": info["name"],
+                                        "input": parsed_input,
+                                    }
+                                )
+
+                    # Capture usage from the final message (inside async with)
+                    try:
+                        final_msg = await stream.get_final_message()
+                        if final_msg and final_msg.usage:
+                            stream_usage = {
+                                "input": final_msg.usage.input_tokens,
+                                "output": final_msg.usage.output_tokens,
+                            }
+                    except Exception as e:
+                        logger.debug(f"Failed to get final message usage: {e}")
+                break  # success — exit retry loop
+            except (_anthropic.RateLimitError, _anthropic.InternalServerError) as exc:
+                if _attempt < _max_retries - 1:
+                    delay = min(1.0 * 2 ** _attempt + random.uniform(0, 0.5), 30.0)
+                    logger.warning(f"API error (attempt {_attempt + 1}/{_max_retries}): {exc}. Retrying in {delay:.1f}s")
+                    await asyncio.sleep(delay)
+                    # Reset buffers for retry
+                    assistant_content.clear()
+                    tool_calls.clear()
+                    text_buffers.clear()
+                    tool_input_buffers.clear()
+                    tool_block_map.clear()
+                    pending_text.clear()
+                    stream_usage = None
+                else:
+                    raise
+            except _anthropic.APIStatusError as exc:
+                if exc.status_code == 529 and _attempt < _max_retries - 1:
+                    delay = min(1.0 * 2 ** _attempt + random.uniform(0, 0.5), 30.0)
+                    logger.warning(f"API overloaded (attempt {_attempt + 1}/{_max_retries}): {exc}. Retrying in {delay:.1f}s")
+                    await asyncio.sleep(delay)
+                    assistant_content.clear()
+                    tool_calls.clear()
+                    text_buffers.clear()
+                    tool_input_buffers.clear()
+                    tool_block_map.clear()
+                    pending_text.clear()
+                    stream_usage = None
+                else:
+                    raise
 
         # Record token usage and metrics (outside async with, using captured data)
         if stream_usage:

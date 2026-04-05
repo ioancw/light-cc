@@ -11,6 +11,7 @@ from sqlalchemy import select, update, or_
 
 from core.database import get_db
 from core.db_models import Conversation, Message
+from core.search import search_conversations
 from routes.auth import get_current_user, User
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
@@ -73,6 +74,18 @@ async def list_conversations(
         )
         for c in rows
     ]
+
+
+@router.get("/search")
+async def search_conversations_endpoint(
+    q: str = Query("", description="Full-text search query"),
+    limit: int = Query(20, ge=1, le=100),
+    user: User = Depends(get_current_user),
+):
+    if not q.strip():
+        return []
+    results = await search_conversations(user.id, q, limit=limit)
+    return results
 
 
 @router.get("/{conversation_id}", response_model=ConversationDetail)

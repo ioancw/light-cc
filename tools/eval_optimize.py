@@ -51,7 +51,7 @@ async def handle_eval_optimize(tool_input: dict[str, Any]) -> str:
                 f"The evaluation criteria are:\n{criteria}"
             )
 
-        current_output = await run_subagent(
+        current_output, _ = await run_subagent(
             prompt=gen_prompt,
             system=(
                 "You are a generator agent. Your job is to produce high-quality output "
@@ -75,7 +75,7 @@ async def handle_eval_optimize(tool_input: dict[str, Any]) -> str:
             f"If pass=false, the feedback MUST explain exactly what to fix."
         )
 
-        eval_result = await run_subagent(
+        eval_result, _ = await run_subagent(
             prompt=eval_prompt,
             system=(
                 "You are an evaluator agent. Assess the output strictly against the criteria. "

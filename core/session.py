@@ -1,7 +1,15 @@
-"""Framework-agnostic session store with DB-backed conversation persistence."""
+"""Framework-agnostic session store with DB-backed conversation persistence.
+
+Two-tier model:
+  - Connection state (per WebSocket): user_id, permission_mode, system prompt, project config
+  - Conversation state (per cid): messages, conversation_id, active_model, datasets, etc.
+
+Multiple conversations can run in parallel on a single WebSocket connection.
+"""
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from contextvars import ContextVar
@@ -11,158 +19,252 @@ from core.config import settings
 
 logger = logging.getLogger(__name__)
 
-# All sessions keyed by session ID (WebSocket connection UUID)
-_sessions: dict[str, dict[str, Any]] = {}
+# ── Connection-level state (one per WebSocket) ───────────────────────
 
-# ContextVar so tools can access the current session without being passed it
+_connections: dict[str, dict[str, Any]] = {}  # session_id -> connection state
+_conn_convs: dict[str, set[str]] = {}         # session_id -> set of cids
+
+# ── Conversation-level state (one per cid) ───────────────────────────
+
+_conv_sessions: dict[str, dict[str, Any]] = {}  # cid -> conversation state
+
+# ── ContextVars (per async task) ─────────────────────────────────────
+
 _current_session_id: ContextVar[str] = ContextVar("current_session_id", default="")
-
-# Active tool filter — set when a skill restricts available tools
+_current_cid: ContextVar[str] = ContextVar("current_cid", default="")
 _active_tool_filter: ContextVar[list[str] | None] = ContextVar("active_tool_filter", default=None)
 
+# ── Tool filter ──────────────────────────────────────────────────────
 
 def set_active_tool_filter(tool_names: list[str] | None) -> None:
-    """Set the active skill's tool filter (or None to allow all)."""
     _active_tool_filter.set(tool_names)
 
 
 def get_active_tool_filter() -> list[str] | None:
-    """Get the active skill's tool filter, or None if all tools are allowed."""
     return _active_tool_filter.get()
 
 
-def create_session(session_id: str, *, user_id: str = "default", conversation_id: str | None = None) -> dict[str, Any]:
-    """Create a new session with default state."""
-    session: dict[str, Any] = {
-        "messages": [],
-        "datasets": {},
-        "last_figure": None,
+# ── Connection management ────────────────────────────────────────────
+
+def create_connection(session_id: str, *, user_id: str = "default") -> dict[str, Any]:
+    """Create connection-level state for a new WebSocket."""
+    conn: dict[str, Any] = {
         "user_id": user_id,
-        "conversation_id": conversation_id,
-        "tasks": {},
         "permission_mode": "default",
-        "active_files": [],
+        "user_system_prompt": "",
         "project_config": None,
         "project_rules": None,
     }
-    _sessions[session_id] = session
-    return session
+    _connections[session_id] = conn
+    _conn_convs[session_id] = set()
+
+    return conn
 
 
-def get_session(session_id: str) -> dict[str, Any] | None:
-    return _sessions.get(session_id)
+def get_connection(session_id: str) -> dict[str, Any] | None:
+    return _connections.get(session_id)
 
 
-async def destroy_session_async(session_id: str) -> None:
-    """Remove session from memory and Redis."""
-    _sessions.pop(session_id, None)
+def connection_get(session_id: str, key: str) -> Any:
+    c = _connections.get(session_id)
+    return c.get(key) if c else None
+
+
+def connection_set(session_id: str, key: str, value: Any) -> None:
+    c = _connections.get(session_id)
+    if c is not None:
+        c[key] = value
+
+
+def destroy_connection(session_id: str) -> None:
+    """Remove connection and all its conversation sub-sessions."""
+    for cid in list(_conn_convs.get(session_id, [])):
+        _conv_sessions.pop(cid, None)
+    _conn_convs.pop(session_id, None)
+    _connections.pop(session_id, None)
+
+
+async def destroy_connection_async(session_id: str) -> None:
+    destroy_connection(session_id)
     from core.redis_store import delete_session_state
     await delete_session_state(session_id)
 
 
-def destroy_session(session_id: str) -> None:
-    """Remove session from memory (sync version for non-async contexts)."""
-    _sessions.pop(session_id, None)
+# ── Conversation sub-session management ──────────────────────────────
+
+_CONV_DEFAULTS = {
+    "messages": [],
+    "datasets": {},
+    "last_figure": None,
+    "conversation_id": None,
+    "active_model": None,
+    "tasks": {},
+    "active_files": [],
+}
 
 
-def session_get(session_id: str, key: str) -> Any:
-    """Get a value from a specific session by ID."""
-    s = _sessions.get(session_id)
+def create_conv_session(cid: str, session_id: str) -> dict[str, Any]:
+    """Create a conversation sub-session linked to a connection."""
+    conv: dict[str, Any] = {
+        **{k: (v.copy() if isinstance(v, (list, dict)) else v) for k, v in _CONV_DEFAULTS.items()},
+        "_conn_id": session_id,
+    }
+    _conv_sessions[cid] = conv
+    _conn_convs.setdefault(session_id, set()).add(cid)
+    return conv
+
+
+def get_or_create_conv_session(cid: str, session_id: str) -> dict[str, Any]:
+    """Get an existing conversation sub-session or lazily create one."""
+    if cid in _conv_sessions:
+        return _conv_sessions[cid]
+    return create_conv_session(cid, session_id)
+
+
+def get_conv_session(cid: str) -> dict[str, Any] | None:
+    return _conv_sessions.get(cid)
+
+
+def conv_session_get(cid: str, key: str) -> Any:
+    s = _conv_sessions.get(cid)
     return s.get(key) if s else None
 
 
-def session_set(session_id: str, key: str, value: Any) -> None:
-    """Set a value in a specific session by ID."""
-    s = _sessions.get(session_id)
+def conv_session_set(cid: str, key: str, value: Any) -> None:
+    s = _conv_sessions.get(cid)
     if s is not None:
         s[key] = value
 
+
+def destroy_conv_session(cid: str) -> None:
+    cs = _conv_sessions.pop(cid, None)
+    if cs:
+        conn_id = cs.get("_conn_id")
+        if conn_id and conn_id in _conn_convs:
+            _conn_convs[conn_id].discard(cid)
+
+
+def get_connection_cids(session_id: str) -> set[str]:
+    """Return the set of active cids for a connection."""
+    return _conn_convs.get(session_id, set()).copy()
+
+
+# ── ContextVar accessors ─────────────────────────────────────────────
 
 def set_current_session(session_id: str) -> None:
     _current_session_id.set(session_id)
 
 
+def set_current_cid(cid: str) -> None:
+    _current_cid.set(cid)
+
+
 def current_session_get(key: str) -> Any:
-    """Get a value from the current session (identified by ContextVar)."""
+    """Get a value, checking conversation state first, then connection state.
+
+    This ensures existing tool code that calls current_session_get("user_id")
+    or current_session_get("messages") keeps working without changes.
+    """
+    # Try conversation-level first
+    cid = _current_cid.get()
+    if cid:
+        cs = _conv_sessions.get(cid)
+        if cs and key in cs:
+            return cs[key]
+
+    # Fall back to connection-level
     sid = _current_session_id.get()
-    s = _sessions.get(sid)
-    return s.get(key) if s else None
+    c = _connections.get(sid)
+    if c and key in c:
+        return c[key]
+
+    return None
 
 
 def current_session_set(key: str, value: Any) -> None:
-    """Set a value in the current session (identified by ContextVar)."""
+    """Set a value, targeting conversation state if the key belongs there."""
+    cid = _current_cid.get()
+    if cid:
+        cs = _conv_sessions.get(cid)
+        if cs and key in cs:
+            cs[key] = value
+            return
+
     sid = _current_session_id.get()
-    s = _sessions.get(sid)
-    if s is not None:
-        s[key] = value
+    c = _connections.get(sid)
+    if c and key in c:
+        c[key] = value
 
 
 # ── Redis sync ────────────────────────────────────────────────────────
 
 async def sync_session_to_redis(session_id: str) -> None:
-    """Push current session state to Redis (if available)."""
-    session = _sessions.get(session_id)
+    session = _connections.get(session_id)
     if session:
         from core.redis_store import save_session_state
         await save_session_state(session_id, session)
 
 
+# ── Per-cid save locks (prevent interleaved delete+insert) ───────────
+
+_save_locks: dict[str, asyncio.Lock] = {}
+
 # ── DB-backed conversation persistence ────────────────────────────────
 
-async def save_conversation(session_id: str) -> str | None:
-    """Persist the current session's messages to the database.
+async def save_conversation(cid: str) -> str | None:
+    """Persist a conversation sub-session's messages to the database.
 
+    Accepts a cid (conversation sub-session key).
     Returns the conversation_id, or None if there's nothing to save.
     """
     from core.database import get_db
     from core.db_models import Conversation, Message
 
-    session = _sessions.get(session_id)
-    if not session or not session["messages"]:
+    cs = _conv_sessions.get(cid)
+    if not cs or not cs.get("messages"):
         return None
 
-    user_id = session["user_id"]
-    conv_id = session.get("conversation_id")
-    active_model = session.get("active_model") or settings.model
+    lock = _save_locks.setdefault(cid, asyncio.Lock())
+    async with lock:
+        conn_id = cs.get("_conn_id")
+        user_id = connection_get(conn_id, "user_id") if conn_id else "default"
+        conv_id = cs.get("conversation_id")
+        active_model = cs.get("active_model") or settings.model
 
-    db = await get_db()
-    try:
-        if conv_id is None:
-            # Create a new conversation
-            title = _derive_title(session["messages"])
-            conv = Conversation(user_id=user_id, title=title, model=active_model)
-            db.add(conv)
-            await db.flush()
-            conv_id = conv.id
-            session["conversation_id"] = conv_id
-        else:
-            # Update existing conversation timestamp and model (preserve title)
-            from sqlalchemy import select, update
-            await db.execute(
-                update(Conversation)
-                .where(Conversation.id == conv_id)
-                .values(model=active_model)
-            )
-            # Delete old messages and re-insert (simpler than diffing)
-            from sqlalchemy import delete
-            await db.execute(delete(Message).where(Message.conversation_id == conv_id))
+        db = await get_db()
+        try:
+            if conv_id is None:
+                title = _derive_title(cs["messages"])
+                conv = Conversation(user_id=user_id, title=title, model=active_model)
+                db.add(conv)
+                await db.flush()
+                conv_id = conv.id
+                cs["conversation_id"] = conv_id
+            else:
+                from sqlalchemy import update
+                await db.execute(
+                    update(Conversation)
+                    .where(Conversation.id == conv_id)
+                    .values(model=active_model)
+                )
+                from sqlalchemy import delete
+                await db.execute(delete(Message).where(Message.conversation_id == conv_id))
 
-        # Insert all messages
-        for msg in session["messages"]:
-            content = msg.get("content", "")
-            if isinstance(content, list):
-                content = json.dumps(content)
-            db.add(Message(
-                conversation_id=conv_id,
-                role=msg["role"],
-                content=content if isinstance(content, str) else json.dumps(content),
-            ))
+            for msg in cs["messages"]:
+                content = msg.get("content", "")
+                if isinstance(content, list):
+                    content = json.dumps(content)
+                db.add(Message(
+                    conversation_id=conv_id,
+                    role=msg["role"],
+                    content=content if isinstance(content, str) else json.dumps(content),
+                ))
 
-        await db.commit()
-    finally:
-        await db.close()
+            await db.commit()
+        finally:
+            await db.close()
 
-    return conv_id
+        return conv_id
 
 
 async def load_conversation(conversation_id: str) -> list[dict[str, Any]]:
@@ -185,7 +287,6 @@ async def load_conversation(conversation_id: str) -> list[dict[str, Any]]:
     messages = []
     for row in rows:
         content = row.content
-        # Try to parse JSON content (for tool results etc.)
         try:
             content = json.loads(content)
         except (json.JSONDecodeError, TypeError):
@@ -196,42 +297,39 @@ async def load_conversation(conversation_id: str) -> list[dict[str, Any]]:
 
 
 async def fork_conversation(source_conv_id: str, user_id: str) -> tuple[str, list[dict[str, Any]]]:
-    """Fork a conversation: copy all messages into a new Conversation row.
+    """Fork a conversation: copy all messages into a new Conversation row."""
+    lock = _save_locks.setdefault(source_conv_id, asyncio.Lock())
+    async with lock:
+        messages = await load_conversation(source_conv_id)
+        if not messages:
+            raise ValueError(f"No messages found for conversation {source_conv_id}")
 
-    Returns (new_conv_id, messages).
-    """
-    messages = await load_conversation(source_conv_id)
-    if not messages:
-        raise ValueError(f"No messages found for conversation {source_conv_id}")
+        from core.database import get_db
+        from core.db_models import Conversation, Message
 
-    from core.database import get_db
-    from core.db_models import Conversation, Message
+        db = await get_db()
+        try:
+            title = _derive_title(messages) + " (fork)"
+            conv = Conversation(user_id=user_id, title=title, model=settings.model)
+            db.add(conv)
+            await db.flush()
+            new_conv_id = conv.id
 
-    db = await get_db()
-    try:
-        # Create new conversation
-        title = _derive_title(messages) + " (fork)"
-        conv = Conversation(user_id=user_id, title=title, model=settings.model)
-        db.add(conv)
-        await db.flush()
-        new_conv_id = conv.id
+            for msg in messages:
+                content = msg.get("content", "")
+                if isinstance(content, list):
+                    content = json.dumps(content)
+                db.add(Message(
+                    conversation_id=new_conv_id,
+                    role=msg["role"],
+                    content=content if isinstance(content, str) else json.dumps(content),
+                ))
 
-        # Copy messages
-        for msg in messages:
-            content = msg.get("content", "")
-            if isinstance(content, list):
-                content = json.dumps(content)
-            db.add(Message(
-                conversation_id=new_conv_id,
-                role=msg["role"],
-                content=content if isinstance(content, str) else json.dumps(content),
-            ))
+            await db.commit()
+        finally:
+            await db.close()
 
-        await db.commit()
-    finally:
-        await db.close()
-
-    return new_conv_id, messages
+        return new_conv_id, messages
 
 
 def _derive_title(messages: list[dict]) -> str:
@@ -240,7 +338,6 @@ def _derive_title(messages: list[dict]) -> str:
         if msg.get("role") == "user":
             content = msg.get("content", "")
             if isinstance(content, list):
-                # Extract text from content blocks
                 for block in content:
                     if isinstance(block, dict) and block.get("type") == "text":
                         content = block["text"]

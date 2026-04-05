@@ -196,6 +196,7 @@ def record_tool_call(tool_name: str, duration: float) -> None:
 
 
 _audit_log = get_logger("audit")
+_audit_log_is_structlog = not isinstance(_audit_log, logging.Logger)
 
 
 def audit_tool_call(
@@ -210,14 +211,20 @@ def audit_tool_call(
     for k, v in tool_input.items():
         sv = str(v)
         input_summary[k] = (sv[:200] + "...") if len(sv) > 200 else sv
-    _audit_log.info(
-        "tool_execution",
-        user_id=user_id,
-        tool_name=tool_name,
-        tool_input=input_summary,
-        success=success,
-        duration_s=round(duration, 3),
-    )
+    if _audit_log_is_structlog:
+        _audit_log.info(
+            "tool_execution",
+            user_id=user_id,
+            tool_name=tool_name,
+            tool_input=input_summary,
+            success=success,
+            duration_s=round(duration, 3),
+        )
+    else:
+        _audit_log.info(
+            "tool_execution user_id=%s tool=%s success=%s duration=%.3fs",
+            user_id, tool_name, success, duration,
+        )
 
 
 def record_tokens(model: str, input_tokens: int, output_tokens: int) -> None:

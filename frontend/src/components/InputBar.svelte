@@ -1,6 +1,6 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
-  import { appState, getStreamingMessage, currentConversation, showToast } from '../state.svelte.js';
+  import { appState, getStreamingMessage, currentConversation, isCurrentStreaming, showToast } from '../state.svelte.js';
   import { send } from '../ws.js';
   import { uploadFile } from '../api.js';
 
@@ -96,7 +96,7 @@
   }
 
   function sendMessage() {
-    if (appState.isStreaming) return;
+    if (isCurrentStreaming()) return;
     if (!appState.connected) return;
 
     const trimmed = text.trim();
@@ -134,12 +134,13 @@
       timestamp: Date.now(),
     });
 
-    appState.isStreaming = true;
-    send('user_message', { text: trimmed });
+    // Send with cid so the server routes to the correct conversation sub-session
+    send('user_message', { text: trimmed }, conv.serverId || conv.id);
   }
 
   function cancelGeneration() {
-    send('cancel_generation', {});
+    const conv = currentConversation();
+    send('cancel_generation', {}, conv?.serverId || conv?.id);
   }
 
   // Drag-and-drop
@@ -225,7 +226,7 @@
     ></textarea>
     <div class="input-footer">
       <div class="input-hints">
-        {#if appState.isStreaming}
+        {#if isCurrentStreaming()}
           <div class="thinking-status">
             <div class="thinking-dot"></div>
             <span>{appState.inlineStatus ? appState.inlineStatus.message : 'Generating...'}</span>
@@ -245,7 +246,7 @@
           <span><span class="kbd">Shift+Enter</span> newline</span>
         {/if}
       </div>
-      {#if appState.isStreaming}
+      {#if isCurrentStreaming()}
         <button class="stop-btn" onclick={cancelGeneration}>
           <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
             <rect x="2" y="2" width="8" height="8" rx="1" fill="currentColor"/>

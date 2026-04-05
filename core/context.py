@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 from typing import Any
@@ -10,6 +11,20 @@ from core.client import get_client
 from core.config import settings
 
 logger = logging.getLogger(__name__)
+
+# Snapshots stored before compression for rollback safety.
+# Keyed by cid (conversation id). Only the most recent snapshot is kept.
+_compression_snapshots: dict[str, list[dict[str, Any]]] = {}
+
+
+def snapshot_before_compression(cid: str, messages: list[dict[str, Any]]) -> None:
+    """Save a deep copy of messages before compression."""
+    _compression_snapshots[cid] = copy.deepcopy(messages)
+
+
+def rollback_compression(cid: str) -> list[dict[str, Any]] | None:
+    """Restore messages from the pre-compression snapshot. Returns None if no snapshot."""
+    return _compression_snapshots.pop(cid, None)
 
 
 def _estimate_tokens(text: str) -> int:
@@ -76,6 +91,15 @@ async def compress_if_needed(
         return messages
 
     logger.info(f"Context at {current} tokens (threshold {threshold}), compressing...")
+
+    # Snapshot before compression for rollback safety
+    try:
+        from core.session import _current_cid
+        cid = _current_cid.get("")
+        if cid:
+            snapshot_before_compression(cid, messages)
+    except Exception:
+        pass  # Non-critical -- proceed with compression anyway
 
     # Split: old messages to compress + recent messages to keep
     keep_count = keep_recent * 2

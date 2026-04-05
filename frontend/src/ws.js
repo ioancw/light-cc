@@ -1,6 +1,7 @@
 // WebSocket client with reconnection and event dispatch.
+// Supports multiplexed conversations via `cid` envelope field.
 
-import { appState, clearAuth, getStreamingMessage, showToast } from './state.svelte.js';
+import { appState, clearAuth, showToast } from './state.svelte.js';
 import { fetchConversationHistory } from './api.js';
 
 let ws = null;
@@ -31,8 +32,8 @@ export function connect() {
   };
 
   ws.onmessage = (event) => {
-    const { type, data } = JSON.parse(event.data);
-    handleEvent(type, data);
+    const { type, data, cid } = JSON.parse(event.data);
+    handleEvent(type, data, cid);
   };
 
   ws.onclose = (event) => {
@@ -60,17 +61,37 @@ export function disconnect() {
   ws = null;
 }
 
-export function send(type, data = {}) {
+export function send(type, data = {}, cid = null) {
   if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type, data }));
+    const msg = { type, data };
+    if (cid) msg.cid = cid;
+    ws.send(JSON.stringify(msg));
   }
+}
+
+// ── Helpers ──
+
+function findConvByCid(cid) {
+  if (!cid) return null;
+  // Match by serverId first, then by local id
+  for (const c of Object.values(appState.conversations)) {
+    if (c.serverId === cid || c.id === cid) return c;
+  }
+  return null;
+}
+
+function getStreamingMsg(conv) {
+  if (!conv) return null;
+  return conv.messages.find(m => m.streaming) || null;
 }
 
 // ── Event dispatch ──
 
-function handleEvent(type, data) {
-  const conv = appState.conversations[appState.currentId];
-  const msg = getStreamingMessage();
+function handleEvent(type, data, cid = null) {
+  // For cid-scoped events, look up the target conversation.
+  // For global events (connected, skills_updated, etc.), conv will be null.
+  const conv = cid ? findConvByCid(cid) : appState.conversations[appState.currentId];
+  const msg = getStreamingMsg(conv);
 
   switch (type) {
     case 'connected':
@@ -80,7 +101,6 @@ function handleEvent(type, data) {
       if (data.available_models) {
         appState.availableModels = data.available_models;
         appState.currentModel = data.model || data.available_models[0] || '';
-        // Restore saved model preference
         const saved = localStorage.getItem('lcc_model');
         if (saved && data.available_models.includes(saved)) {
           if (saved !== data.model) send('set_model', { model: saved });
@@ -91,10 +111,16 @@ function handleEvent(type, data) {
       break;
 
     case 'model_changed':
-      if (data.model) appState.currentModel = data.model;
+      if (data.model) {
+        // If scoped to a conversation, update that conversation's model
+        if (conv) conv.model = data.model;
+        // Always update the global current model for display
+        appState.currentModel = data.model;
+      }
       break;
 
     case 'conversation_loaded':
+      if (conv) conv.stub = false;
       if (conv && data.messages && data.messages.length > 0) {
         conv.messages = data.messages.map((m, i) => ({
           role: m.role,
@@ -114,8 +140,8 @@ function handleEvent(type, data) {
           streaming: false,
         }));
       }
-      if (data.context_tokens != null) {
-        appState.totalTokens = data.context_tokens;
+      if (data.context_tokens != null && conv) {
+        conv.totalTokens = data.context_tokens;
       }
       if (data.model) appState.currentModel = data.model;
       break;
@@ -198,11 +224,14 @@ function handleEvent(type, data) {
       break;
 
     case 'permission_request':
-      appState.pendingPermission = {
-        requestId: data.request_id,
-        toolName: data.tool_name,
-        summary: data.summary,
-      };
+      if (cid) {
+        appState.pendingPermissions[cid] = {
+          cid: cid,
+          requestId: data.request_id,
+          toolName: data.tool_name,
+          summary: data.summary,
+        };
+      }
       break;
 
     case 'notification':
@@ -224,7 +253,6 @@ function handleEvent(type, data) {
 
     case 'response_end':
       if (msg) msg.streaming = false;
-      appState.isStreaming = false;
       appState.inlineStatus = null;
       break;
 
@@ -233,27 +261,26 @@ function handleEvent(type, data) {
         msg.streaming = false;
         if (!msg.content) msg.content = '(cancelled)';
       }
-      appState.isStreaming = false;
       appState.inlineStatus = null;
       break;
 
     case 'turn_complete':
       if (msg) msg.streaming = false;
-      appState.isStreaming = false;
       appState.inlineStatus = null;
       if (data.conversation_id && conv) {
         conv.serverId = data.conversation_id;
       }
-      if (data.context_tokens != null) {
-        appState.totalTokens = data.context_tokens;
+      if (data.context_tokens != null && conv) {
+        conv.totalTokens = data.context_tokens;
       }
+      if (conv) conv.updatedAt = Date.now();
       fetchConversationHistory();
       // Auto-generate title after first assistant response
       if (conv && conv.serverId && !conv.titleGenerated) {
         const assistantMsgs = conv.messages.filter(m => m.role === 'assistant' && m.content);
         if (assistantMsgs.length === 1) {
           conv.titleGenerated = true;
-          send('generate_title', {});
+          send('generate_title', {}, conv.serverId || conv.id);
         }
       }
       break;
@@ -267,6 +294,8 @@ function handleEvent(type, data) {
         messages: conv ? [...conv.messages.map(m => ({ ...m, streaming: false }))] : [],
         createdAt: Date.now(),
         forkedFrom: data.source_conversation_id,
+        titleGenerated: true,
+        totalTokens: 0,
       };
       appState.currentId = forkId;
       break;
@@ -279,12 +308,6 @@ function handleEvent(type, data) {
             c.title = data.title;
           }
         }
-        // Also update the server conversations list so History shows correct titles
-        for (const sc of (appState.serverConversations || [])) {
-          if (sc.id === data.conversation_id) {
-            sc.title = data.title;
-          }
-        }
       }
       break;
 
@@ -293,10 +316,11 @@ function handleEvent(type, data) {
       const sname = data.schedule_name || 'Scheduled task';
       const slabel = data.status === 'completed' ? 'completed' : 'failed';
       showToast(`${sname} ${slabel} -- click to view`, slabel === 'failed' ? 'error' : 'info');
-      // Refresh server conversations so the new one appears in the sidebar
       fetchConversationHistory();
-      // If the user isn't mid-conversation, switch to the result
-      if (convId && !appState.isStreaming) {
+      // If the user isn't mid-conversation in current chat, switch to the result
+      const currentConv = appState.conversations[appState.currentId];
+      const currentBusy = currentConv && currentConv.messages.some(m => m.streaming);
+      if (convId && !currentBusy) {
         const localId = 'conv_' + Date.now();
         appState.conversations[localId] = {
           id: localId,
@@ -305,15 +329,16 @@ function handleEvent(type, data) {
           messages: [],
           createdAt: Date.now(),
           titleGenerated: true,
+          totalTokens: 0,
         };
         appState.currentId = localId;
-        send('resume_conversation', { conversation_id: convId });
+        send('resume_conversation', { conversation_id: convId }, localId);
       }
       break;
     }
 
     case 'context_summarized':
-      appState.totalTokens = 0;
+      if (conv) conv.totalTokens = 0;
       break;
 
     case 'error':
@@ -321,7 +346,6 @@ function handleEvent(type, data) {
         msg.content += '\n\nError: ' + data.message;
         msg.streaming = false;
       }
-      appState.isStreaming = false;
       break;
   }
 }

@@ -21,12 +21,12 @@ async def handle_write(tool_input: dict[str, Any]) -> str:
         return err
 
     try:
-        # Checkpoint before writing
+        # Checkpoint before writing (keyed by cid for multiplexed conversations)
         from core.checkpoints import snapshot_file
-        from core.session import _current_session_id, current_session_get
-        sid = _current_session_id.get("")
-        if sid:
-            snapshot_file(sid, str(path))
+        from core.session import _current_session_id, _current_cid, current_session_get
+        cp_key = _current_cid.get("") or _current_session_id.get("")
+        if cp_key:
+            snapshot_file(cp_key, str(path))
 
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")

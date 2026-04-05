@@ -1,4 +1,15 @@
-"""Permission system — detect risky tools and blocked commands."""
+"""Permission system — detect risky tools and blocked commands.
+
+THREAT MODEL NOTE:
+This module is a UX guardrail (defense-in-depth), NOT a security sandbox.
+It uses substring pattern matching on command strings and Python source text,
+which is fundamentally bypassable via encoding, obfuscation, variable expansion,
+eval(), aliases, and many other techniques.
+
+For actual security isolation, use process-level sandboxing (containers,
+seccomp, nsjail). This module prevents accidental destructive commands in
+normal usage — it should not be relied upon to contain a malicious actor.
+"""
 
 from __future__ import annotations
 

@@ -2,6 +2,7 @@
   import { renderMarkdown, highlightCode } from '../lib/markdown.js';
   import { formatTime, escapeHtml } from '../lib/utils.js';
   import { send } from '../ws.js';
+  import { currentConversation } from '../state.svelte.js';
   import ToolCall from './ToolCall.svelte';
 
   let { msg } = $props();
@@ -21,11 +22,13 @@
   }
 
   function retryMessage() {
-    send('retry', {});
+    const conv = currentConversation();
+    send('retry', {}, conv?.serverId || conv?.id);
   }
 
   function forkConversation() {
-    send('fork_conversation', {});
+    const conv = currentConversation();
+    send('fork_conversation', {}, conv?.serverId || conv?.id);
   }
 
   // Split streaming "thinking aloud" text into bullet points for readability.

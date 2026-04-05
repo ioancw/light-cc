@@ -1,31 +1,34 @@
 <script>
-  import { appState } from '../state.svelte.js';
+  import { appState, pendingPermission } from '../state.svelte.js';
   import { send } from '../ws.js';
 
   let denyBtnEl = $state(null);
 
+  // Reactive: permission for the currently-viewed conversation
+  let perm = $derived(pendingPermission());
+
   $effect(() => {
-    if (appState.pendingPermission && denyBtnEl) {
+    if (perm && denyBtnEl) {
       denyBtnEl.focus();
     }
   });
 
   function allow() {
-    if (!appState.pendingPermission) return;
-    send('permission_response', { request_id: appState.pendingPermission.requestId, allowed: true });
-    appState.pendingPermission = null;
+    if (!perm) return;
+    send('permission_response', { request_id: perm.requestId, allowed: true }, perm.cid);
+    delete appState.pendingPermissions[perm.cid];
   }
 
   function deny() {
-    if (!appState.pendingPermission) return;
-    send('permission_response', { request_id: appState.pendingPermission.requestId, allowed: false });
-    appState.pendingPermission = null;
+    if (!perm) return;
+    send('permission_response', { request_id: perm.requestId, allowed: false }, perm.cid);
+    delete appState.pendingPermissions[perm.cid];
   }
 </script>
 
-<svelte:window onkeydown={(e) => { if (appState.pendingPermission && e.key === 'Escape') deny(); }} />
+<svelte:window onkeydown={(e) => { if (perm && e.key === 'Escape') deny(); }} />
 
-{#if appState.pendingPermission}
+{#if perm}
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="permission-overlay">
@@ -38,7 +41,7 @@
         Tool Permission Required
       </div>
       <div class="permission-body">
-        <strong>{appState.pendingPermission.toolName}</strong> wants to run: {appState.pendingPermission.summary}
+        <strong>{perm.toolName}</strong> wants to run: {perm.summary}
       </div>
       <div class="permission-actions">
         <button class="permission-btn deny" bind:this={denyBtnEl} onclick={deny}>Deny</button>

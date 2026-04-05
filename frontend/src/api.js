@@ -52,7 +52,50 @@ export async function fetchConversationHistory(query) {
       headers: { 'Authorization': `Bearer ${appState.authToken}` },
     });
     if (!resp.ok) return;
-    appState.serverConversations = await resp.json();
+    const serverList = await resp.json();
+
+    // Build a set of server IDs already loaded locally
+    const localByServerId = {};
+    for (const c of Object.values(appState.conversations)) {
+      if (c.serverId) localByServerId[c.serverId] = c;
+    }
+
+    // Merge server conversations into the local map
+    for (const sc of serverList) {
+      if (localByServerId[sc.id]) {
+        // Already loaded -- just update title/timestamps if server is newer
+        const local = localByServerId[sc.id];
+        if (sc.title && sc.title !== local.title && local.titleGenerated) {
+          local.title = sc.title;
+        }
+        local.updatedAt = new Date(sc.updated_at).getTime();
+      } else {
+        // Not loaded locally -- add as a stub (no messages until clicked)
+        const localId = 'srv_' + sc.id;
+        if (!appState.conversations[localId]) {
+          appState.conversations[localId] = {
+            id: localId,
+            serverId: sc.id,
+            title: sc.title || 'Conversation',
+            messages: [],
+            createdAt: new Date(sc.created_at).getTime(),
+            updatedAt: new Date(sc.updated_at).getTime(),
+            titleGenerated: true,
+            pinned: false,
+            totalTokens: 0,
+            stub: true, // not yet loaded from server
+          };
+        }
+      }
+    }
+
+    // Remove stubs for conversations deleted on server
+    const serverIds = new Set(serverList.map(sc => sc.id));
+    for (const [id, c] of Object.entries(appState.conversations)) {
+      if (c.stub && !serverIds.has(c.serverId)) {
+        delete appState.conversations[id];
+      }
+    }
   } catch {
     // silently ignore
   }
@@ -78,9 +121,27 @@ export async function deleteServerConversation(serverId) {
       method: 'DELETE',
       headers: { 'Authorization': `Bearer ${appState.authToken}` },
     });
-    appState.serverConversations = appState.serverConversations.filter(c => c.id !== serverId);
+    // Remove all local entries pointing to this server conversation
+    for (const [id, c] of Object.entries(appState.conversations)) {
+      if (c.serverId === serverId) {
+        delete appState.conversations[id];
+      }
+    }
   } catch {
     // silently ignore
+  }
+}
+
+export async function searchConversations(query) {
+  if (!appState.authToken || !query.trim()) return [];
+  try {
+    const resp = await fetch(`/api/conversations/search?q=${encodeURIComponent(query)}`, {
+      headers: { 'Authorization': `Bearer ${appState.authToken}` },
+    });
+    if (!resp.ok) return [];
+    return await resp.json();
+  } catch {
+    return [];
   }
 }
 
