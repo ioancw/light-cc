@@ -39,7 +39,8 @@
       "Bash(npx vite:*)",
       "Bash(gh repo:*)",
       "Bash(git:*)",
-      "Bash(head:*)"
+      "Bash(head:*)",
+      "Bash(wc -l /c/Users/ioanc/github/light_cc/**/*.py)"
     ]
   }
 }

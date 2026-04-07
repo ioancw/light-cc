@@ -29,9 +29,7 @@
 <svelte:window onkeydown={(e) => { if (perm && e.key === 'Escape') deny(); }} />
 
 {#if perm}
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="permission-overlay">
+  <div class="permission-overlay" role="presentation">
     <div class="permission-dialog" role="dialog" aria-modal="true" aria-labelledby="permissionTitle">
       <div class="permission-title" id="permissionTitle">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
@@ -98,12 +96,13 @@
     color: var(--fg);
     line-height: 1.7;
     margin-bottom: 20px;
-    font-family: 'Geist Mono', monospace;
+    font-family: var(--font-mono);
     padding: 12px;
     background: var(--surface2);
     border-radius: 4px;
     border: 1px solid var(--border);
-    word-break: break-all;
+    overflow-wrap: break-word;
+    word-break: break-word;
   }
 
   .permission-actions {
@@ -113,7 +112,7 @@
   .permission-btn {
     padding: 8px 20px;
     border-radius: 4px;
-    font-family: 'Geist Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 11px;
     font-weight: 600;
     cursor: pointer;

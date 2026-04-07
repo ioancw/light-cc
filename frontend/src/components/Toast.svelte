@@ -20,9 +20,7 @@
 {#if appState.toasts && appState.toasts.length > 0}
   <div class="toast-container">
     {#each appState.toasts as toast (toast.id)}
-      <!-- svelte-ignore a11y_click_events_have_key_events -->
-      <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div
+      <button
         class="toast"
         class:error={toast.type === 'error'}
         class:success={toast.type === 'success'}
@@ -30,7 +28,7 @@
         onclick={() => dismiss(toast.id)}
       >
         {toast.message}
-      </div>
+      </button>
     {/each}
   </div>
 {/if}
@@ -55,7 +53,7 @@
     color: var(--fg);
     padding: 10px 24px;
     border-radius: 8px;
-    font-family: 'Geist Mono', monospace;
+    font-family: var(--font-ui);
     font-size: 11px;
     letter-spacing: 0.04em;
     box-shadow: 0 8px 32px rgba(0,0,0,0.25);

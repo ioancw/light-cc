@@ -1,12 +1,15 @@
 /* All 5 theme variable sets -- ported from loom.css */
 
 :root {
+  --font-ui:      'DM Sans', system-ui, -apple-system, sans-serif;
+  --font-mono:    'Geist Mono', monospace;
+  --font-prose:   'Source Serif 4', Georgia, serif;
   --bg:           #0c0c0e;
   --surface:      #111115;
   --surface2:     #16161c;
   --border:       #1e1e26;
   --border2:      #28282e;
-  --muted:        #3c3c4e;
+  --muted:        #4a4a5e;
   --dim:          #5a5a72;
   --fg:           #c4c4d4;
   --fg-bright:    #e8e8f2;
@@ -14,6 +17,9 @@
   --accent:       #6366f1;
   --accent-soft:  #818cf8;
   --accent-glow:  rgba(99,102,241,0.15);
+  --accent2:      #f59e0b;
+  --accent2-soft: #fbbf24;
+  --accent2-glow: rgba(245,158,11,0.12);
   --green:        #10b981;
   --green-soft:   rgba(16,185,129,0.12);
   --amber:        #f59e0b;
@@ -25,30 +31,34 @@
   --sidebar-w:    240px;
   --radius:       6px;
   --transition:   cubic-bezier(0.4, 0, 0.2, 1);
+  --content-max-w: 720px;
 }
 
 [data-theme="light"] {
-  --bg:           #f5f5f7;
+  --bg:           #fafaf8;
   --surface:      #ffffff;
-  --surface2:     #eeeef0;
-  --border:       #d8d8de;
-  --border2:      #c8c8d0;
-  --muted:        #9898a8;
-  --dim:          #6e6e82;
-  --fg:           #3a3a4a;
-  --fg-bright:    #1a1a2a;
-  --fg-dim:       #5a5a6e;
-  --accent:       #4f46e5;
-  --accent-soft:  #6366f1;
-  --accent-glow:  rgba(79,70,229,0.1);
-  --green:        #059669;
-  --green-soft:   rgba(5,150,105,0.1);
-  --amber:        #d97706;
-  --amber-soft:   rgba(217,119,6,0.08);
+  --surface2:     #f3f2ef;
+  --border:       #e8e6e1;
+  --border2:      #dddbd5;
+  --muted:        #9a958c;
+  --dim:          #706b63;
+  --fg:           #3a3632;
+  --fg-bright:    #1a1816;
+  --fg-dim:       #5c574f;
+  --accent:       #1a7f64;
+  --accent-soft:  #1a7f64;
+  --accent-glow:  rgba(26,127,100,0.06);
+  --accent2:      #b45309;
+  --accent2-soft: #d97706;
+  --accent2-glow: rgba(180,83,9,0.06);
+  --green:        #16a34a;
+  --green-soft:   rgba(22,163,74,0.06);
+  --amber:        #ca8a04;
+  --amber-soft:   rgba(202,138,4,0.04);
   --red:          #dc2626;
-  --red-soft:     rgba(220,38,38,0.08);
-  --blue:         #0284c7;
-  --blue-soft:    rgba(2,132,199,0.08);
+  --red-soft:     rgba(220,38,38,0.05);
+  --blue:         #0369a1;
+  --blue-soft:    rgba(3,105,161,0.05);
 }
 
 [data-theme="dracula"] {
@@ -73,6 +83,9 @@
   --red-soft:     rgba(255,85,85,0.1);
   --blue:         #8be9fd;
   --blue-soft:    rgba(139,233,253,0.1);
+  --accent2:      #f1fa8c;
+  --accent2-soft: #f5fc9e;
+  --accent2-glow: rgba(241,250,140,0.12);
 }
 
 [data-theme="solarized"] {
@@ -97,6 +110,9 @@
   --red-soft:     rgba(220,50,47,0.1);
   --blue:         #2aa198;
   --blue-soft:    rgba(42,161,152,0.1);
+  --accent2:      #b58900;
+  --accent2-soft: #cb9a00;
+  --accent2-glow: rgba(181,137,0,0.12);
 }
 
 [data-theme="nord"] {
@@ -121,4 +137,7 @@
   --red-soft:     rgba(191,97,106,0.1);
   --blue:         #5e81ac;
   --blue-soft:    rgba(94,129,172,0.1);
+  --accent2:      #ebcb8b;
+  --accent2-soft: #f0d89e;
+  --accent2-glow: rgba(235,203,139,0.12);
 }

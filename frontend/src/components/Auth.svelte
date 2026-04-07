@@ -138,7 +138,7 @@
     margin-bottom: 36px;
   }
   .auth-logo h1 {
-    font-family: 'Lora', serif;
+    font-family: var(--font-prose);
     font-size: 24px;
     font-weight: 600;
     letter-spacing: -0.02em;
@@ -168,7 +168,7 @@
     background: none;
     border-bottom: 2px solid transparent;
     transition: all 0.2s;
-    font-family: 'Geist Mono', monospace;
+    font-family: var(--font-ui);
   }
   .tab.active {
     color: var(--accent);
@@ -194,7 +194,7 @@
     border: 1px solid var(--border2);
     border-radius: 6px;
     color: var(--fg);
-    font-family: 'Geist Mono', monospace;
+    font-family: var(--font-ui);
     font-size: 14px;
     outline: none;
     transition: border-color 0.2s;
@@ -211,7 +211,7 @@
     color: #fff;
     border: none;
     border-radius: 6px;
-    font-family: 'Geist Mono', monospace;
+    font-family: var(--font-ui);
     font-size: 14px;
     font-weight: 500;
     cursor: pointer;

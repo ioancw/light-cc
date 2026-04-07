@@ -26,6 +26,7 @@
     <div class="status-dot" style:background={dotColor} style:box-shadow="0 0 6px {dotColor}"></div>
     <span class="status-text {statusClass}">{statusText}</span>
   </div>
+  <span class="status-sep"></span>
   <div class="token-count">
     <span class="token-value">{formatTokens(appState.totalTokens)}</span> tokens
   </div>
@@ -35,10 +36,11 @@
   .status-bar {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    gap: 12px;
     padding: 0;
     flex-shrink: 0;
-    font-size: 11px;
+    font-size: 12px;
+    font-family: var(--font-ui);
   }
 
   .connection {
@@ -51,19 +53,21 @@
     width: 6px; height: 6px;
     border-radius: 50%;
     flex-shrink: 0;
-    animation: status-pulse 2s ease-in-out infinite;
-  }
-  @keyframes status-pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.6; }
   }
 
   .status-text {
-    letter-spacing: 0.08em;
+    letter-spacing: 0.01em;
   }
   .status-text.connected { color: var(--green); }
   .status-text.connecting { color: var(--amber); }
   .status-text.disconnected { color: var(--red); }
+
+  .status-sep {
+    width: 1px;
+    height: 12px;
+    background: var(--border2);
+    flex-shrink: 0;
+  }
 
   .token-count {
     color: var(--muted);

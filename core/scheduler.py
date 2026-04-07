@@ -108,13 +108,14 @@ async def _execute_schedule(
         return True
 
     # Resolve skill/command references in prompt (e.g. "/analyze AAPL")
-    resolved_prompt = prompt
-    system_extra = ""
+    user_text = prompt
+    skill_prompt: str | None = None
     tool_filter = None
 
     if prompt.strip().startswith("/"):
         from skills.registry import match_skill_by_name
         from commands.registry import get_command
+        from core.models import resolve_dynamic_content
 
         tokens = prompt.strip().split(None, 1)
         slash_name = tokens[0][1:]  # strip leading /
@@ -122,22 +123,30 @@ async def _execute_schedule(
 
         skill = match_skill_by_name(slash_name)
         if skill:
-            resolved_prompt = skill.resolve_arguments(slash_args)
-            if skill.prompt:
-                system_extra = f"\n\n## Active Skill: {skill.name}\n{skill.prompt}"
+            # Skill prompt goes into system (like normal chat flow),
+            # only the user's arguments go into the user message.
+            skill_prompt = skill.resolve_arguments(slash_args)
+            skill_prompt = await resolve_dynamic_content(skill_prompt)
+            user_text = slash_args or skill.description
             if skill.tools:
                 tool_filter = skill.tools
         else:
             cmd = get_command(slash_name)
             if cmd:
-                resolved_prompt = cmd.resolve_arguments(slash_args)
+                skill_prompt = cmd.resolve_arguments(slash_args)
+                skill_prompt = await resolve_dynamic_content(skill_prompt)
+                user_text = slash_args or cmd.description
 
-    system = (
-        f"You are a scheduled agent running the task '{name}'. "
-        "Complete the task thoroughly and return a clear, concise result."
-        f"{system_extra}"
+    # Use the same system prompt builder as normal chat so Claude gets
+    # full context (tool guidelines, output dirs, no-emoji rules, etc.)
+    from server import _build_system_prompt
+    from core.sandbox import get_workspace
+    user_workspace = get_workspace(user_id)
+    system = _build_system_prompt(
+        skill_prompt=skill_prompt,
+        outputs_dir=str(user_workspace.outputs),
     )
-    messages: list[dict[str, Any]] = [{"role": "user", "content": resolved_prompt}]
+    messages: list[dict[str, Any]] = [{"role": "user", "content": user_text}]
 
     if tool_filter:
         from tools.registry import get_tool_schemas
@@ -196,7 +205,7 @@ async def _execute_schedule(
         db.add(DbMessage(
             conversation_id=conv_id,
             role="user",
-            content=resolved_prompt,
+            content=prompt,
         ))
         if result_text:
             db.add(DbMessage(

@@ -280,7 +280,7 @@ function handleEvent(type, data, cid = null) {
         const assistantMsgs = conv.messages.filter(m => m.role === 'assistant' && m.content);
         if (assistantMsgs.length === 1) {
           conv.titleGenerated = true;
-          send('generate_title', {}, conv.serverId || conv.id);
+          send('generate_title', {}, conv.id);
         }
       }
       break;

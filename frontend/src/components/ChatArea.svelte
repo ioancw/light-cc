@@ -81,72 +81,51 @@
     align-items: center;
     justify-content: center;
     height: 100%;
-    gap: 24px;
+    gap: 16px;
     padding: 40px;
     text-align: center;
-    animation: empty-fade-in 0.5s ease;
+    animation: empty-fade-in 0.4s ease;
   }
   @keyframes empty-fade-in {
-    from { opacity: 0; transform: translateY(12px); }
-    to { opacity: 1; transform: translateY(0); }
+    from { opacity: 0; }
+    to { opacity: 1; }
   }
 
   .empty-logo {
-    width: 52px; height: 52px;
-    background: linear-gradient(135deg, var(--accent) 0%, #a78bfa 100%);
-    border-radius: 14px;
+    width: 40px; height: 40px;
+    background: var(--fg-bright);
+    border-radius: 10px;
     display: flex; align-items: center; justify-content: center;
-    box-shadow: 0 0 40px rgba(99,102,241,0.25), 0 8px 32px rgba(99,102,241,0.15);
-    animation: float 4s ease-in-out infinite;
-    position: relative;
-  }
-  .empty-logo::after {
-    content: '';
-    position: absolute;
-    inset: -4px;
-    border-radius: 18px;
-    background: linear-gradient(135deg, var(--accent) 0%, #a78bfa 100%);
-    opacity: 0.15;
-    z-index: -1;
-    animation: float 4s ease-in-out infinite reverse;
-  }
-  @keyframes float {
-    0%, 100% { transform: translateY(0) rotate(0deg); }
-    50% { transform: translateY(-6px) rotate(1deg); }
   }
 
   .empty-state h2 {
-    font-size: 17px;
-    color: var(--fg-dim);
-    font-weight: 500;
-    letter-spacing: -0.01em;
-    font-family: 'Lora', serif;
+    font-size: 20px;
+    color: var(--fg-bright);
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    font-family: var(--font-prose);
   }
   .empty-state p {
-    font-size: 12px;
+    font-size: 14px;
     color: var(--muted);
-    max-width: 360px;
-    line-height: 1.8;
+    max-width: 340px;
+    line-height: 1.6;
+    font-family: var(--font-ui);
   }
   .empty-cta {
-    background: transparent;
-    border: 1px dashed var(--border2);
+    background: var(--surface2);
+    border: 1px solid var(--border2);
     border-radius: 8px;
     color: var(--fg-dim);
     padding: 10px 24px;
-    font-family: 'Geist Mono', monospace;
-    font-size: 11px;
-    letter-spacing: 0.04em;
+    font-family: var(--font-ui);
+    font-size: 14px;
     cursor: pointer;
-    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: background 0.15s ease;
   }
   .empty-cta:hover {
-    border-color: var(--accent);
-    border-style: solid;
-    color: var(--accent-soft);
-    background: var(--accent-glow);
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(99,102,241,0.2);
+    background: var(--border);
+    color: var(--fg-bright);
   }
 
 </style>

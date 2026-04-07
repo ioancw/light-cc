@@ -134,13 +134,15 @@
       timestamp: Date.now(),
     });
 
-    // Send with cid so the server routes to the correct conversation sub-session
-    send('user_message', { text: trimmed }, conv.serverId || conv.id);
+    // Send with cid so the server routes to the correct conversation sub-session.
+    // Always use conv.id (the local key) -- serverId is assigned after the first
+    // turn and would create a new empty session on the server if used as cid.
+    send('user_message', { text: trimmed }, conv.id);
   }
 
   function cancelGeneration() {
     const conv = currentConversation();
-    send('cancel_generation', {}, conv?.serverId || conv?.id);
+    send('cancel_generation', {}, conv?.id);
   }
 
   // Drag-and-drop
@@ -173,6 +175,27 @@
     }
   }
 
+  // Attachment button
+  function handleAttach() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.multiple = true;
+    input.onchange = async () => {
+      if (!input.files || input.files.length === 0) return;
+      for (const file of input.files) {
+        try {
+          const data = await uploadFile('', file);
+          text += (text ? '\n' : '') + data.path;
+          autoResize();
+          showToast(`Uploaded ${file.name}`, 'success');
+        } catch (err) {
+          showToast(`Upload failed: ${file.name}`, 'error');
+        }
+      }
+    };
+    input.click();
+  }
+
   // Listen for text insertion from FilePanel
   function onInsertText(e) {
     text += (text ? '\n' : '') + e.detail;
@@ -189,18 +212,16 @@
 </script>
 
 <div class="input-area">
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="input-wrapper" class:drag-over={dragOver}
-    ondragenter={onDragEnter} ondragover={onDragOver} ondragleave={onDragLeave} ondrop={onDrop}>
+    ondragenter={onDragEnter} ondragover={onDragOver} ondragleave={onDragLeave} ondrop={onDrop} role="group">
     {#if acVisible && acMatches.length > 0}
       <div class="autocomplete-dropdown">
         {#each acMatches as skill, i (i)}
-          <!-- svelte-ignore a11y_click_events_have_key_events -->
-          <!-- svelte-ignore a11y_no_static_element_interactions -->
-          <div
+          <button
             class="autocomplete-item"
             class:active={i === acIndex}
             onmousedown={() => selectAutocomplete(skill.name)}
+            type="button"
           >
             <div class="autocomplete-top">
               <span class="autocomplete-name">/{skill.name}</span>
@@ -211,7 +232,7 @@
             {#if skill.description}
               <div class="autocomplete-desc">{skill.description}</div>
             {/if}
-          </div>
+          </button>
         {/each}
       </div>
     {/if}
@@ -232,100 +253,102 @@
             <span>{appState.inlineStatus ? appState.inlineStatus.message : 'Generating...'}</span>
           </div>
         {:else if appState.needsScrollDown}
-          <!-- svelte-ignore a11y_click_events_have_key_events -->
-          <!-- svelte-ignore a11y_no_static_element_interactions -->
-          <span class="scroll-hint" onclick={() => appState.scrollToBottom?.()}>
+          <button class="scroll-hint" onclick={() => appState.scrollToBottom?.()}>
             <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
               <path d="M6 2v8M2 7l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
             scroll to bottom
-          </span>
+          </button>
           <span><span class="kbd">Shift+Enter</span> newline</span>
         {:else}
           <span><span class="kbd">Enter</span> send</span>
           <span><span class="kbd">Shift+Enter</span> newline</span>
         {/if}
       </div>
-      {#if isCurrentStreaming()}
-        <button class="stop-btn" onclick={cancelGeneration}>
-          <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
-            <rect x="2" y="2" width="8" height="8" rx="1" fill="currentColor"/>
+      <div class="input-actions">
+        <button class="attach-btn" onclick={handleAttach} title="Attach files">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+            <path d="M14 8l-5.5 5.5a3.5 3.5 0 01-5-5L9 3a2 2 0 013 3L6.5 11.5a.5.5 0 01-.7-.7L11 5.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
-          Stop
         </button>
-      {:else}
-        <button class="send-btn" onclick={sendMessage} disabled={!text.trim() || !appState.connected}>
-          <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
-            <path d="M1 11L11 6 1 1v4l7 1-7 1v4z" fill="currentColor"/>
-          </svg>
-          Send
-        </button>
-      {/if}
+        {#if isCurrentStreaming()}
+          <button class="stop-btn" onclick={cancelGeneration} title="Stop generation">
+            <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
+              <rect x="2" y="2" width="8" height="8" rx="1" fill="currentColor"/>
+            </svg>
+          </button>
+        {:else}
+          <button class="send-btn" onclick={sendMessage} disabled={!text.trim() || !appState.connected} title="Send message">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+              <path d="M1 11L11 6 1 1v4l7 1-7 1v4z" fill="currentColor"/>
+            </svg>
+          </button>
+        {/if}
+      </div>
     </div>
   </div>
 </div>
 
 <style>
   .input-area {
-    padding: 16px 28px 22px;
-    border-top: 1px solid var(--border);
-    background: linear-gradient(to top, var(--bg) 60%, color-mix(in srgb, var(--bg) 90%, transparent));
+    padding: 12px max(32px, calc((100% - var(--content-max-w)) / 2)) 20px;
+    background: var(--bg);
     flex-shrink: 0;
   }
 
   .input-wrapper {
+    max-width: var(--content-max-w);
+    margin-left: 40px;
+    width: 100%;
     background: var(--surface);
     border: 1px solid var(--border2);
-    border-radius: 8px;
-    transition: border-color 0.2s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    border-radius: 12px;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
     position: relative;
-    box-shadow: 0 2px 12px rgba(0,0,0,0.08);
   }
   .input-wrapper:focus-within {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 3px var(--accent-glow), 0 4px 20px rgba(0,0,0,0.12);
+    border-color: var(--muted);
+    box-shadow: 0 1px 8px rgba(0,0,0,0.06);
   }
   .input-wrapper.drag-over {
     border-color: var(--accent);
     background: var(--accent-glow);
-    box-shadow: 0 0 0 3px var(--accent-glow);
   }
 
   .input-textarea {
     width: 100%;
     background: transparent;
     border: none;
-    padding: 14px 16px 10px;
+    padding: 14px 18px 10px;
     color: var(--fg-bright);
-    font-family: 'Geist Mono', monospace;
-    font-size: 13px;
+    font-family: var(--font-ui);
+    font-size: 15px;
     line-height: 1.6;
     resize: none;
     min-height: 52px;
     max-height: 200px;
     overflow-y: auto;
-    letter-spacing: 0.02em;
   }
   .input-textarea::placeholder { color: var(--muted); }
   .input-textarea:focus { outline: none; }
 
   .input-footer {
-    padding: 8px 14px 10px;
+    padding: 6px 16px 10px;
     display: flex; align-items: center; justify-content: space-between;
   }
 
   .input-hints {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--muted);
-    letter-spacing: 0.08em;
     display: flex; gap: 12px;
+    font-family: var(--font-ui);
   }
 
   .thinking-status {
     display: flex; align-items: center; gap: 8px;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--dim);
-    letter-spacing: 0.05em;
+    font-family: var(--font-ui);
   }
   .thinking-dot {
     width: 6px; height: 6px;
@@ -338,44 +361,55 @@
     50% { opacity: 1; }
   }
 
-  .send-btn {
-    background: var(--accent);
-    border: none;
-    border-radius: 5px;
-    color: #fff;
-    padding: 7px 18px;
-    font-family: 'Geist Mono', monospace;
-    font-size: 11px;
-    font-weight: 600;
-    cursor: pointer;
-    letter-spacing: 0.06em;
-    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  .input-actions {
     display: flex; align-items: center; gap: 6px;
   }
-  .send-btn:hover {
-    background: #4f46e5;
-    box-shadow: 0 0 20px rgba(99,102,241,0.4);
-    transform: translateY(-1px);
+
+  .attach-btn {
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    color: var(--muted);
+    width: 32px; height: 32px;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: color 0.15s ease;
+    padding: 0;
   }
-  .send-btn:active { transform: translateY(0); }
-  .send-btn:disabled { opacity: 0.4; cursor: not-allowed; box-shadow: none; transform: none; }
+  .attach-btn:hover {
+    color: var(--fg-dim);
+  }
+
+  .send-btn {
+    background: var(--fg-bright);
+    border: none;
+    border-radius: 50%;
+    color: var(--bg);
+    width: 30px; height: 30px;
+    cursor: pointer;
+    transition: opacity 0.15s ease;
+    display: flex; align-items: center; justify-content: center;
+    padding: 0;
+  }
+  .send-btn:hover {
+    opacity: 0.8;
+  }
+  .send-btn:active { opacity: 0.7; }
+  .send-btn:disabled { opacity: 0.25; cursor: not-allowed; }
 
   .stop-btn {
     background: var(--red-soft);
     border: 1px solid var(--red);
-    border-radius: 5px;
+    border-radius: 50%;
     color: var(--red);
-    padding: 7px 18px;
-    font-family: 'Geist Mono', monospace;
-    font-size: 11px;
-    font-weight: 600;
+    width: 30px; height: 30px;
     cursor: pointer;
-    letter-spacing: 0.06em;
-    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-    display: flex; align-items: center; gap: 6px;
+    transition: all 0.15s ease;
+    display: flex; align-items: center; justify-content: center;
+    padding: 0;
   }
-  .stop-btn:hover { background: var(--red); color: #fff; transform: translateY(-1px); }
-  .stop-btn:active { transform: translateY(0); }
+  .stop-btn:hover { background: var(--red); color: #fff; }
+  .stop-btn:active { opacity: 0.8; }
 
   /* Autocomplete */
   .autocomplete-dropdown {
@@ -397,8 +431,14 @@
   .autocomplete-item {
     padding: 8px 14px;
     cursor: pointer;
+    border: none;
     border-bottom: 1px solid var(--border);
     transition: background 0.1s;
+    background: none;
+    width: 100%;
+    text-align: left;
+    color: inherit;
+    font: inherit;
   }
   .autocomplete-item:last-child { border-bottom: none; }
   .autocomplete-item:hover, .autocomplete-item.active {
@@ -413,7 +453,7 @@
     font-size: 12px;
     font-weight: 600;
     color: var(--accent-soft);
-    font-family: 'Geist Mono', monospace;
+    font-family: var(--font-mono);
   }
 
   .autocomplete-hint {
@@ -438,6 +478,10 @@
     transition: color 0.15s ease;
     font-size: 11px;
     letter-spacing: 0.05em;
+    background: none;
+    border: none;
+    font: inherit;
+    padding: 0;
   }
   .scroll-hint:hover {
     color: var(--accent-soft);

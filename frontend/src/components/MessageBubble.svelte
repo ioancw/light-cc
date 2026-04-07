@@ -8,10 +8,24 @@
   let { msg } = $props();
 
   let bodyEl = $state(null);
+  let highlightTimer = null;
 
   $effect(() => {
     if (bodyEl && msg.role === 'assistant' && msg.content) {
-      requestAnimationFrame(() => highlightCode(bodyEl));
+      if (msg.streaming) {
+        // Debounce during streaming -- highlight at most every 500ms
+        if (!highlightTimer) {
+          highlightTimer = setTimeout(() => {
+            highlightTimer = null;
+            requestAnimationFrame(() => highlightCode(bodyEl));
+          }, 500);
+        }
+      } else {
+        // Immediate highlight when streaming is done
+        clearTimeout(highlightTimer);
+        highlightTimer = null;
+        requestAnimationFrame(() => highlightCode(bodyEl));
+      }
     }
   });
 
@@ -23,26 +37,12 @@
 
   function retryMessage() {
     const conv = currentConversation();
-    send('retry', {}, conv?.serverId || conv?.id);
+    send('retry', {}, conv?.id);
   }
 
   function forkConversation() {
     const conv = currentConversation();
-    send('fork_conversation', {}, conv?.serverId || conv?.id);
-  }
-
-  // Split streaming "thinking aloud" text into bullet points for readability.
-  // Only applies to streaming content that lacks markdown structure (no headers,
-  // lists, or code blocks). Splits on sentence boundaries.
-  function bulletizeStreaming(text) {
-    if (!text) return text;
-    // Don't touch content that already has markdown structure
-    if (/^[\s]*[#\-*>`|]|```/m.test(text)) return text;
-    // Split on sentence boundaries: period/exclamation/question followed by
-    // a capital letter or common transition phrase
-    const sentences = text.split(/(?<=\.)\s+(?=[A-Z])/).filter(s => s.trim());
-    if (sentences.length <= 1) return text;
-    return sentences.map(s => `- ${s.trim()}`).join('\n');
+    send('fork_conversation', {}, conv?.id);
   }
 
   function handleCopyClick(e) {
@@ -56,9 +56,7 @@
   }
 </script>
 
-<!-- svelte-ignore a11y_click_events_have_key_events -->
-<!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="msg-row" class:user-row={msg.role === 'user'} class:assistant-row={msg.role === 'assistant'} onclick={handleCopyClick}>
+<div class="msg-row" class:user-row={msg.role === 'user'} class:assistant-row={msg.role === 'assistant'} onclick={handleCopyClick} role="article">
   {#if msg.role === 'user'}
     <div class="msg-avatar user-av">U</div>
   {:else}
@@ -68,7 +66,7 @@
   {/if}
   <div class="msg-body" bind:this={bodyEl}>
     <div class="msg-header">
-      <span class="msg-role" class:user={msg.role === 'user'} class:assistant={msg.role === 'assistant'}>
+      <span class="msg-role">
         {msg.role === 'user' ? 'You' : 'Light CC'}
       </span>
       {#if msg.timestamp}
@@ -97,7 +95,7 @@
       {#if msg.role === 'user'}
         {@html escapeHtml(msg.content).replace(/\n/g, '<br>')}
       {:else if msg.content}
-        {@html renderMarkdown(msg.toolCalls?.length ? bulletizeStreaming(msg.content) : msg.content)}
+        {@html renderMarkdown(msg.content)}
         {#if msg.streaming}
           <span class="cursor-blink"></span>
         {/if}
@@ -113,103 +111,88 @@
 
 <style>
   .msg-row {
-    padding: 10px 28px;
-    border-bottom: 1px solid var(--border);
+    padding: 24px max(32px, calc((100% - var(--content-max-w)) / 2));
     display: grid;
-    grid-template-columns: 28px 1fr;
+    grid-template-columns: 26px minmax(0, 1fr);
     gap: 14px;
     align-items: start;
-    animation: msg-in 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    animation: msg-in 0.3s ease;
     position: relative;
-    transition: background 0.15s ease;
   }
   @keyframes msg-in {
-    from { opacity: 0; transform: translateY(8px); }
+    from { opacity: 0; transform: translateY(6px); }
     to   { opacity: 1; transform: translateY(0); }
   }
 
-  .msg-row.user-row { background: var(--surface); }
-  .msg-row.assistant-row { background: var(--bg); }
-  .msg-row.assistant-row::before {
-    content: '';
-    position: absolute;
-    left: 0; top: 0; bottom: 0;
-    width: 2px;
-    background: linear-gradient(to bottom, var(--accent) 0%, transparent 100%);
-    opacity: 0.5;
-  }
-  .msg-row:hover { background: color-mix(in srgb, var(--surface2) 30%, transparent); }
+  .msg-row.user-row { background: transparent; }
+  .msg-row.assistant-row { background: transparent; }
 
   .msg-avatar {
-    width: 28px; height: 28px;
-    border-radius: 6px;
+    width: 26px; height: 26px;
+    border-radius: 50%;
     display: flex; align-items: center; justify-content: center;
     font-size: 11px; font-weight: 600;
     flex-shrink: 0;
-    margin-top: 1px;
-    transition: transform 0.2s ease;
+    margin-top: 2px;
   }
-  .msg-row:hover .msg-avatar { transform: scale(1.05); }
   .msg-avatar.user-av {
     background: var(--surface2);
     border: 1px solid var(--border2);
     color: var(--fg-dim);
   }
   .msg-avatar.ai-av {
-    background: linear-gradient(135deg, #4338ca 0%, #7c3aed 100%);
+    background: var(--accent);
     color: #fff;
-    box-shadow: 0 0 14px rgba(124,58,237,0.3);
   }
 
   .msg-body { min-width: 0; max-width: 100%; overflow: hidden; }
 
   .msg-header {
     display: flex; align-items: baseline; gap: 10px;
-    margin-bottom: 4px;
+    margin-bottom: 6px;
   }
   .msg-role {
-    font-size: 11px;
-    letter-spacing: 0.15em;
-    text-transform: uppercase;
+    font-size: 13px;
     font-weight: 600;
+    letter-spacing: 0.01em;
+    font-family: var(--font-ui);
   }
-  .msg-role.user { color: var(--fg-dim); }
-  .msg-role.assistant { color: var(--accent-soft); }
 
   .msg-time {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--muted);
-    letter-spacing: 0.05em;
   }
 
   .msg-actions {
     margin-left: auto;
-    display: flex; gap: 4px;
+    display: flex; gap: 2px;
     opacity: 0;
     transition: opacity 0.15s;
   }
   .msg-row:hover .msg-actions { opacity: 1; }
-  .assistant-row .msg-actions { opacity: 1; }
 
   .msg-action-btn {
     background: transparent;
-    border: 1px solid transparent;
+    border: none;
     color: var(--muted);
     padding: 3px 8px;
     border-radius: 4px;
     cursor: pointer;
-    font-size: 11px;
-    font-family: 'Geist Mono', monospace;
-    letter-spacing: 0.05em;
-    transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+    font-size: 12px;
+    font-family: var(--font-ui);
+    transition: color 0.15s, background 0.15s;
   }
-  .msg-action-btn:hover { border-color: var(--border2); color: var(--fg-dim); background: var(--surface2); }
+  .msg-action-btn:hover { color: var(--fg-dim); background: var(--surface2); }
 
   .tool-calls-container {
-    margin: 6px 0;
+    margin: 8px 0;
+    padding: 4px 0;
     display: flex;
     flex-direction: column;
-    gap: 3px;
+    gap: 0;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 2px 8px;
   }
 
   /* Prose is styled globally in global.css */
@@ -217,24 +200,25 @@
 
   .streaming-indicator {
     display: flex; align-items: center; gap: 10px;
-    padding: 4px 0;
+    padding: 8px 0;
     color: var(--dim);
-    font-size: 11px;
+    font-size: 13px;
+    font-family: var(--font-ui);
   }
   .stream-dots {
     display: flex; gap: 4px;
   }
   .stream-dots span {
-    width: 5px; height: 5px;
+    width: 4px; height: 4px;
     border-radius: 50%;
     background: var(--accent);
-    animation: dot-bounce 1.2s ease-in-out infinite;
+    animation: dot-bounce 1.4s ease-in-out infinite;
   }
   .stream-dots span:nth-child(2) { animation-delay: 0.15s; }
   .stream-dots span:nth-child(3) { animation-delay: 0.3s; }
   @keyframes dot-bounce {
     0%, 100% { opacity: 0.2; transform: translateY(0); }
-    50% { opacity: 1; transform: translateY(-3px); }
+    50% { opacity: 1; transform: translateY(-2px); }
   }
 
   .cursor-blink {
@@ -248,5 +232,14 @@
   @keyframes cursor-blink-anim {
     0%, 100% { opacity: 1; }
     50% { opacity: 0; }
+  }
+
+  @media (max-width: 768px) {
+    .msg-row {
+      padding: 16px 16px;
+      grid-template-columns: 22px minmax(0, 1fr);
+      gap: 10px;
+    }
+    .msg-avatar { width: 22px; height: 22px; font-size: 10px; }
   }
 </style>

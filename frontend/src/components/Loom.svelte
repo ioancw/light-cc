@@ -9,8 +9,11 @@
   import PermissionDialog from './PermissionDialog.svelte';
   import Toast from './Toast.svelte';
   import FilePanel from './FilePanel.svelte';
+  import StatusBar from './StatusBar.svelte';
+  import Settings from './Settings.svelte';
 
   let filePanelRef = $state(null);
+  let settingsOpen = $state(false);
 
   onMount(() => {
     newConversation();
@@ -60,7 +63,7 @@
   function selectModel(model) {
     if (model) {
       const conv = currentConversation();
-      send('set_model', { model }, conv?.serverId || conv?.id);
+      send('set_model', { model }, conv?.id);
       localStorage.setItem('lcc_model', model);
       appState.currentModel = model;
     }
@@ -97,14 +100,21 @@
   <main class="main">
     <div class="topbar">
       <span class="topbar-title">{topbarTitle}</span>
+      <div class="topbar-status">
+        <StatusBar />
+      </div>
       <div class="topbar-actions">
+        <button class="topbar-btn" onclick={() => settingsOpen = true} title="Settings">
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+            <circle cx="8" cy="8" r="2" stroke="currentColor" stroke-width="1.3" fill="none"/>
+            <path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.41 1.41M11.54 11.54l1.41 1.41M3.05 12.95l1.41-1.41M11.54 4.46l1.41-1.41" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+          </svg>
+        </button>
         <button class="topbar-btn" onclick={() => filePanelRef?.toggle()} title="File browser">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
             <path d="M2 3h4l2 2h6v8H2V3z" stroke="currentColor" stroke-width="1.3" fill="none"/>
           </svg>
         </button>
-        <!-- svelte-ignore a11y_click_events_have_key_events -->
-        <!-- svelte-ignore a11y_no_static_element_interactions -->
         <div class="model-dropdown" bind:this={modelDropdownEl}>
           <button class="model-trigger" onclick={toggleModelDropdown} class:open={modelDropdownOpen}>
             <span>{modelLabel(appState.currentModel) || 'Model'}</span>
@@ -115,7 +125,7 @@
           {#if modelDropdownOpen}
             <div class="model-menu">
               {#each appState.availableModels as model (model)}
-                <div
+                <button
                   class="model-option"
                   class:selected={model === appState.currentModel}
                   onclick={() => selectModel(model)}
@@ -126,7 +136,7 @@
                       <path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
                     </svg>
                   {/if}
-                </div>
+                </button>
               {/each}
             </div>
           {/if}
@@ -140,6 +150,7 @@
 </div>
 
 <FilePanel bind:this={filePanelRef} />
+<Settings bind:open={settingsOpen} />
 <PermissionDialog />
 <Toast />
 
@@ -167,27 +178,28 @@
 
   .topbar {
     padding: 0 24px;
-    height: 52px;
+    height: 48px;
     border-bottom: 1px solid var(--border);
-    display: flex; align-items: center; justify-content: space-between;
+    display: flex; align-items: center; gap: 16px;
     flex-shrink: 0;
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
-    background: color-mix(in srgb, var(--bg) 85%, transparent);
+    background: var(--bg);
     position: relative;
     z-index: 10;
   }
 
   .topbar-title {
-    font-size: 12px;
     color: var(--fg-bright);
     font-weight: 500;
-    letter-spacing: 0.04em;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-family: 'Lora', serif;
-    font-size: 13px;
+    font-family: var(--font-ui);
+    font-size: 14px;
+  }
+
+  .topbar-status {
+    margin-left: auto;
+    flex-shrink: 0;
   }
 
   .topbar-actions {
@@ -196,20 +208,18 @@
 
   .topbar-btn {
     background: transparent;
-    border: 1px solid var(--border2);
-    border-radius: 5px;
-    color: var(--fg-dim);
+    border: none;
+    border-radius: 6px;
+    color: var(--muted);
     width: 30px; height: 30px;
     cursor: pointer;
     display: flex; align-items: center; justify-content: center;
-    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: color 0.15s, background 0.15s;
     padding: 0;
   }
   .topbar-btn:hover {
-    border-color: var(--accent);
-    color: var(--accent-soft);
-    background: var(--accent-glow);
-    transform: translateY(-1px);
+    color: var(--fg-dim);
+    background: var(--surface2);
   }
 
   .model-dropdown {
@@ -217,27 +227,25 @@
   }
 
   .model-trigger {
-    background: var(--surface2);
+    background: transparent;
     border: 1px solid var(--border2);
-    border-radius: 5px;
+    border-radius: 6px;
     color: var(--fg-dim);
-    font-size: 11px;
+    font-size: 12px;
     padding: 5px 10px;
     cursor: pointer;
-    font-family: 'Geist Mono', monospace;
-    letter-spacing: 0.03em;
-    transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
+    font-family: var(--font-ui);
+    transition: border-color 0.15s, background 0.15s;
     display: flex;
     align-items: center;
     gap: 6px;
   }
   .model-trigger:hover {
     border-color: var(--muted);
-    background: var(--surface);
   }
   .model-trigger.open {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 3px var(--accent-glow);
+    border-color: var(--muted);
+    background: var(--surface2);
   }
   .model-chevron {
     transition: transform 0.2s ease;
@@ -266,9 +274,8 @@
 
   .model-option {
     padding: 8px 14px;
-    font-size: 11px;
-    font-family: 'Geist Mono', monospace;
-    letter-spacing: 0.03em;
+    font-size: 13px;
+    font-family: var(--font-ui);
     color: var(--fg-dim);
     cursor: pointer;
     display: flex;
@@ -276,7 +283,11 @@
     justify-content: space-between;
     gap: 8px;
     transition: background 0.1s ease;
-    border-bottom: 1px solid color-mix(in srgb, var(--border) 40%, transparent);
+    border: none;
+    border-bottom: 1px solid var(--border);
+    background: none;
+    width: 100%;
+    text-align: left;
   }
   .model-option:last-child { border-bottom: none; }
   .model-option:hover {
@@ -291,7 +302,7 @@
   }
 
   @media (max-width: 768px) {
-    .app {
+    .app, .app.sidebar-hidden {
       grid-template-columns: 1fr;
     }
     .topbar {

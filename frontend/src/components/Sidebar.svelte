@@ -1,11 +1,9 @@
 <script>
   import { appState, sortedConversations, newConversation, switchConversation } from '../state.svelte.js';
-  import { logout, fetchConversationHistory, deleteServerConversation, importConversation, renameConversation, searchConversations } from '../api.js';
+  import { fetchConversationHistory, deleteServerConversation, importConversation, renameConversation, searchConversations } from '../api.js';
   import { send } from '../ws.js';
-  import { THEMES, setTheme } from '../theme.js';
   import { debounce } from '../lib/utils.js';
   import { showToast } from '../state.svelte.js';
-  import StatusBar from './StatusBar.svelte';
 
   let searchQuery = $state('');
   let searchResults = $state([]);
@@ -42,6 +40,37 @@
       .filter(c => !isScheduled(c))
       .filter(c => !searchQuery || c.title.toLowerCase().includes(searchQuery.toLowerCase()))
   );
+
+  // Time-grouped conversations
+  function getTimeGroup(ts) {
+    if (!ts) return 'Older';
+    const now = new Date();
+    const d = new Date(ts);
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const startOfYesterday = new Date(startOfToday - 86400000);
+    const startOf7Days = new Date(startOfToday - 6 * 86400000);
+    if (d >= startOfToday) return 'Today';
+    if (d >= startOfYesterday) return 'Yesterday';
+    if (d >= startOf7Days) return 'Last 7 days';
+    return 'Older';
+  }
+
+  let groupedConversations = $derived.by(() => {
+    const groups = [];
+    const order = ['Today', 'Yesterday', 'Last 7 days', 'Older'];
+    const grouped = {};
+    for (const conv of filteredConversations) {
+      const group = getTimeGroup(conv.updatedAt || conv.createdAt);
+      if (!grouped[group]) grouped[group] = [];
+      grouped[group].push(conv);
+    }
+    for (const label of order) {
+      if (grouped[label]?.length) {
+        groups.push({ label, convs: grouped[label] });
+      }
+    }
+    return groups;
+  });
 
   let filteredScheduled = $derived(
     sortedConversations()
@@ -234,42 +263,46 @@
   </div>
 
   <div class="chat-list">
-    {#each filteredConversations as conv (conv.id)}
-      <!-- svelte-ignore a11y_click_events_have_key_events -->
-      <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div
-        class="chat-item"
-        class:active={conv.id === appState.currentId}
-        onclick={() => handleSwitchChat(conv.id)}
-        ondblclick={(e) => { e.stopPropagation(); startRename(conv); }}
-      >
-        {#if conv.messages?.some(m => m.streaming)}
-          <div class="chat-item-dot streaming"></div>
-        {:else}
-          <div class="chat-item-dot" class:stub={conv.stub}></div>
-        {/if}
-        {#if renamingId === conv.id}
-          <!-- svelte-ignore a11y_autofocus -->
-          <input
-            class="chat-item-rename"
-            type="text"
-            bind:value={renameValue}
-            onkeydown={(e) => renameKeydown(e, conv)}
-            onblur={() => commitRename(conv)}
-            onclick={(e) => e.stopPropagation()}
-            autofocus
-          />
-        {:else if confirmingDeleteId === conv.id}
-          <span class="chat-item-confirm">delete?</span>
-          <button class="chat-item-confirm-btn yes" onclick={(e) => { e.stopPropagation(); confirmDelete(conv.id); }}>yes</button>
-          <button class="chat-item-confirm-btn no" onclick={(e) => { e.stopPropagation(); cancelDelete(); }}>no</button>
-        {:else}
-          <span class="chat-item-title">{conv.title}</span>
-        {/if}
-        {#if confirmingDeleteId !== conv.id}
-          <button class="chat-item-delete" onclick={(e) => { e.stopPropagation(); requestDelete(conv.id); }} title="Delete">&times;</button>
-        {/if}
-      </div>
+    {#each groupedConversations as group (group.label)}
+      <div class="sidebar-section-label time-group">{group.label}</div>
+      {#each group.convs as conv (conv.id)}
+        <div
+          class="chat-item"
+          class:active={conv.id === appState.currentId}
+          onclick={() => handleSwitchChat(conv.id)}
+          ondblclick={(e) => { e.stopPropagation(); startRename(conv); }}
+          onkeydown={(e) => { if (e.key === 'Enter') handleSwitchChat(conv.id); }}
+          role="button"
+          tabindex="0"
+        >
+          {#if conv.messages?.some(m => m.streaming)}
+            <div class="chat-item-dot streaming"></div>
+          {:else}
+            <div class="chat-item-dot" class:stub={conv.stub}></div>
+          {/if}
+          {#if renamingId === conv.id}
+            <!-- svelte-ignore a11y_autofocus -->
+            <input
+              class="chat-item-rename"
+              type="text"
+              bind:value={renameValue}
+              onkeydown={(e) => renameKeydown(e, conv)}
+              onblur={() => commitRename(conv)}
+              onclick={(e) => e.stopPropagation()}
+              autofocus
+            />
+          {:else if confirmingDeleteId === conv.id}
+            <span class="chat-item-confirm">delete?</span>
+            <button class="chat-item-confirm-btn yes" onclick={(e) => { e.stopPropagation(); confirmDelete(conv.id); }}>yes</button>
+            <button class="chat-item-confirm-btn no" onclick={(e) => { e.stopPropagation(); cancelDelete(); }}>no</button>
+          {:else}
+            <span class="chat-item-title">{conv.title}</span>
+          {/if}
+          {#if confirmingDeleteId !== conv.id}
+            <button class="chat-item-delete" onclick={(e) => { e.stopPropagation(); requestDelete(conv.id); }} title="Delete">&times;</button>
+          {/if}
+        </div>
+      {/each}
     {/each}
 
     {#if filteredScheduled.length > 0}
@@ -281,12 +314,13 @@
         Scheduled
       </div>
       {#each filteredScheduled as conv (conv.id)}
-        <!-- svelte-ignore a11y_click_events_have_key_events -->
-        <!-- svelte-ignore a11y_no_static_element_interactions -->
         <div
           class="chat-item scheduled"
           class:active={conv.id === appState.currentId}
           onclick={() => handleSwitchChat(conv.id)}
+          onkeydown={(e) => { if (e.key === 'Enter') handleSwitchChat(conv.id); }}
+          role="button"
+          tabindex="0"
         >
           <svg class="chat-item-schedule-icon" width="11" height="11" viewBox="0 0 16 16" fill="none">
             <circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.3"/>
@@ -318,11 +352,12 @@
           Content matches
         </div>
         {#each filteredSearchResults as result (result.conversation_id)}
-          <!-- svelte-ignore a11y_click_events_have_key_events -->
-          <!-- svelte-ignore a11y_no_static_element_interactions -->
           <div
             class="chat-item search-result"
             onclick={() => handleSwitchChat('srv_' + result.conversation_id)}
+            onkeydown={(e) => { if (e.key === 'Enter') handleSwitchChat('srv_' + result.conversation_id); }}
+            role="button"
+            tabindex="0"
           >
             <div class="chat-item-dot stub"></div>
             <div class="search-result-content">
@@ -344,27 +379,10 @@
   </div>
 
   <div class="sidebar-footer">
-    <div class="theme-selector" role="radiogroup" aria-label="Color theme">
-      <span class="theme-label">Theme</span>
-      {#each THEMES as t (t.name)}
-        <button
-          class="theme-dot"
-          class:active={appState.theme === t.name}
-          style:background={t.color}
-          title={t.label}
-          role="radio"
-          aria-label="{t.label} theme"
-          aria-checked={appState.theme === t.name}
-          onclick={() => setTheme(t.name)}
-        ></button>
-      {/each}
-    </div>
-    <StatusBar />
     <div class="shortcut-hints">
       <span><span class="kbd">Ctrl+B</span> sidebar</span>
       <span><span class="kbd">Ctrl+K</span> new chat</span>
     </div>
-    <button class="logout-btn" onclick={logout}>Sign Out</button>
   </div>
 </aside>
 
@@ -388,9 +406,11 @@
     flex-shrink: 0;
   }
   .sidebar.collapsed {
-    margin-left: calc(-1 * var(--sidebar-w));
+    width: 0;
+    min-width: 0;
     opacity: 0;
     pointer-events: none;
+    overflow: hidden;
   }
 
   .sidebar-header {
@@ -403,22 +423,18 @@
 
   .logo-mark {
     width: 20px; height: 20px;
-    background: linear-gradient(135deg, var(--accent) 0%, #a78bfa 100%);
-    border-radius: 4px;
+    background: var(--fg-bright);
+    border-radius: 5px;
     display: flex; align-items: center; justify-content: center;
-    box-shadow: 0 0 12px rgba(99,102,241,0.35);
     flex-shrink: 0;
-    transition: box-shadow 0.3s ease;
-  }
-  .sidebar-header:hover .logo-mark {
-    box-shadow: 0 0 18px rgba(99,102,241,0.5);
   }
 
   .logo-name {
-    font-size: 13px;
+    font-size: 14px;
     font-weight: 600;
     color: var(--fg-bright);
-    letter-spacing: 0.06em;
+    letter-spacing: -0.01em;
+    font-family: var(--font-ui);
   }
 
   .sidebar-close-btn {
@@ -437,24 +453,19 @@
   .new-chat-btn {
     margin: 12px 12px 8px;
     padding: 9px 12px;
-    background: transparent;
-    border: 1px dashed var(--border2);
+    background: var(--surface2);
+    border: 1px solid var(--border2);
     border-radius: var(--radius);
     color: var(--fg-dim);
-    font-family: 'Geist Mono', monospace;
-    font-size: 11px;
+    font-family: var(--font-ui);
+    font-size: 13px;
     cursor: pointer;
     display: flex; align-items: center; gap: 8px;
-    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-    letter-spacing: 0.03em;
+    transition: all 0.15s ease;
   }
   .new-chat-btn:hover {
-    border-color: var(--accent);
-    border-style: solid;
-    color: var(--accent-soft);
-    background: var(--accent-glow);
-    transform: translateY(-1px);
-    box-shadow: 0 2px 8px rgba(99,102,241,0.15);
+    background: var(--border);
+    color: var(--fg-bright);
   }
 
   .sidebar-actions {
@@ -466,28 +477,34 @@
     flex: 1;
     padding: 5px 8px;
     background: transparent;
-    border: 1px solid var(--border2);
+    border: none;
     border-radius: var(--radius);
     color: var(--muted);
-    font-family: 'Geist Mono', monospace;
-    font-size: 11px;
+    font-family: var(--font-ui);
+    font-size: 12px;
     cursor: pointer;
     display: flex; align-items: center; gap: 5px; justify-content: center;
-    transition: all 0.15s;
-    letter-spacing: 0.03em;
+    transition: color 0.15s;
   }
   .sidebar-action-btn:hover {
-    border-color: var(--accent);
-    color: var(--accent-soft);
+    color: var(--fg-dim);
   }
 
   .sidebar-section-label {
-    padding: 12px 16px 4px;
+    padding: 14px 12px 4px;
     font-size: 11px;
-    letter-spacing: 0.2em;
+    letter-spacing: 0.06em;
     text-transform: uppercase;
     color: var(--muted);
+    font-weight: 600;
+  }
+  .sidebar-section-label.time-group {
+    padding: 10px 12px 2px;
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    color: var(--muted);
     font-weight: 500;
+    text-transform: none;
   }
 
   .sidebar-search {
@@ -495,16 +512,16 @@
   }
   .sidebar-search input {
     width: 100%;
-    padding: 6px 10px;
-    background: var(--surface2);
+    padding: 7px 10px;
+    background: var(--bg);
     border: 1px solid var(--border2);
-    border-radius: 4px;
+    border-radius: 6px;
     color: var(--fg);
-    font-family: 'Geist Mono', monospace;
-    font-size: 11px;
+    font-family: var(--font-ui);
+    font-size: 13px;
     outline: none;
   }
-  .sidebar-search input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-glow); }
+  .sidebar-search input:focus { border-color: var(--muted); }
   .sidebar-search input::placeholder { color: var(--muted); }
 
   .chat-list {
@@ -517,28 +534,27 @@
 
   .chat-item {
     padding: 8px 10px;
-    border-radius: 5px;
+    border-radius: 6px;
     cursor: pointer;
-    font-size: 11px;
-    color: var(--dim);
+    font-size: 13px;
+    color: var(--fg-dim);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
-    border: 1px solid transparent;
-    margin-bottom: 2px;
+    transition: background 0.15s ease, color 0.15s ease;
+    border: none;
+    margin-bottom: 1px;
     display: flex; align-items: center; gap: 8px;
     background: none;
     width: 100%;
     text-align: left;
-    font-family: 'Geist Mono', monospace;
+    font-family: var(--font-ui);
   }
   .chat-item:hover { color: var(--fg); background: var(--surface2); }
   .chat-item.active {
     color: var(--fg-bright);
     background: var(--surface2);
-    border-color: var(--border2);
-    box-shadow: inset 2px 0 0 var(--accent);
+    font-weight: 500;
   }
 
   .chat-item-dot {
@@ -575,7 +591,7 @@
     background: none;
     border: 1px solid var(--border2);
     border-radius: 3px;
-    font-family: 'Geist Mono', monospace;
+    font-family: var(--font-ui);
     font-size: 10px;
     letter-spacing: 0.05em;
     padding: 1px 8px;
@@ -604,7 +620,7 @@
     border: 1px solid var(--accent);
     border-radius: 3px;
     color: var(--fg-bright);
-    font-family: 'Geist Mono', monospace;
+    font-family: var(--font-ui);
     font-size: 11px;
     padding: 2px 6px;
     outline: none;
@@ -642,36 +658,9 @@
   }
 
   .sidebar-footer {
-    padding: 14px 16px;
+    padding: 10px 16px;
     border-top: 1px solid var(--border);
-    display: flex; flex-direction: column; gap: 10px;
-    background: linear-gradient(to top, var(--surface2) 0%, transparent 100%);
   }
-
-  .theme-selector {
-    display: flex;
-    gap: 7px;
-    align-items: center;
-    padding: 4px 0;
-  }
-  .theme-label {
-    font-size: 11px;
-    color: var(--muted);
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    margin-right: 4px;
-  }
-  .theme-dot {
-    width: 16px; height: 16px;
-    border-radius: 50%;
-    border: 2px solid transparent;
-    cursor: pointer;
-    transition: border-color 0.2s, transform 0.2s, box-shadow 0.2s;
-    flex-shrink: 0;
-    padding: 0;
-  }
-  .theme-dot:hover { transform: scale(1.2); box-shadow: 0 0 8px rgba(99,102,241,0.25); }
-  .theme-dot.active { border-color: var(--fg-bright); box-shadow: 0 0 6px rgba(255,255,255,0.1); }
 
   .shortcut-hints {
     display: flex;
@@ -681,20 +670,6 @@
     color: var(--muted);
     letter-spacing: 0.04em;
   }
-
-  .logout-btn {
-    padding: 7px 10px;
-    background: var(--surface2);
-    border: 1px solid var(--border2);
-    border-radius: var(--radius);
-    color: var(--fg-dim);
-    font-family: 'Geist Mono', monospace;
-    font-size: 11px;
-    cursor: pointer;
-    transition: all 0.2s;
-    text-align: center;
-  }
-  .logout-btn:hover { border-color: var(--red); color: var(--red); background: var(--red-soft); }
 
   .sidebar-open-btn {
     position: fixed;

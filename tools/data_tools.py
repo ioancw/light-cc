@@ -211,9 +211,19 @@ async def handle_query_data(tool_input: dict[str, Any]) -> str:
 
     df = datasets[name]
 
+    _SAFE_BUILTINS = {
+        "len": len, "sum": sum, "min": min, "max": max, "abs": abs,
+        "round": round, "sorted": sorted, "reversed": reversed,
+        "enumerate": enumerate, "zip": zip, "map": map, "filter": filter,
+        "range": range, "list": list, "dict": dict, "set": set, "tuple": tuple,
+        "int": int, "float": float, "str": str, "bool": bool, "type": type,
+        "isinstance": isinstance, "any": any, "all": all, "print": print,
+        "True": True, "False": False, "None": None,
+    }
+
     try:
         local_vars: dict[str, Any] = {"df": df, "pd": pd}
-        exec(f"__result__ = {code}", {"__builtins__": {}}, local_vars)
+        exec(f"__result__ = {code}", {"__builtins__": _SAFE_BUILTINS}, local_vars)
         result = local_vars.get("__result__", None)
 
         if isinstance(result, pd.DataFrame):

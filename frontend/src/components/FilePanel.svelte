@@ -99,9 +99,7 @@
 </script>
 
 {#if open}
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="file-panel-overlay" onclick={close}></div>
+  <div class="file-panel-overlay" onclick={close} role="presentation"></div>
   <div class="file-panel">
     <div class="file-panel-header">
       <span class="file-panel-title">Files</span>
@@ -112,9 +110,7 @@
     <div class="file-breadcrumb">
       {#each breadcrumbs() as crumb, i}
         {#if i > 0}<span class="breadcrumb-sep">/</span>{/if}
-        <!-- svelte-ignore a11y_click_events_have_key_events -->
-        <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <span class="breadcrumb-item" onclick={() => navigate(crumb.path)}>{crumb.label}</span>
+        <button class="breadcrumb-item" onclick={() => navigate(crumb.path)}>{crumb.label}</button>
       {/each}
     </div>
 
@@ -127,23 +123,19 @@
         <div class="file-panel-empty">Empty directory</div>
       {:else}
         {#if currentPath}
-          <!-- svelte-ignore a11y_click_events_have_key_events -->
-          <!-- svelte-ignore a11y_no_static_element_interactions -->
-          <div class="file-entry" onclick={() => navigate(currentPath.split('/').slice(0, -1).join('/'))}>
+          <button class="file-entry" onclick={() => navigate(currentPath.split('/').slice(0, -1).join('/'))}>
             <span class="file-entry-icon">..</span>
             <span class="file-entry-name">..</span>
-          </div>
+          </button>
         {/if}
         {#each entries as entry (entry.path || entry.name)}
-          <!-- svelte-ignore a11y_click_events_have_key_events -->
-          <!-- svelte-ignore a11y_no_static_element_interactions -->
-          <div class="file-entry" onclick={() => handleFileClick(entry)}>
+          <button class="file-entry" onclick={() => handleFileClick(entry)}>
             <span class="file-entry-icon">{entry.is_dir ? '\u25B6' : '\u25AA'}</span>
             <span class="file-entry-name">{entry.name}</span>
             {#if entry.size != null}
               <span class="file-entry-size">{formatFileSize(entry.size)}</span>
             {/if}
-          </div>
+          </button>
         {/each}
       {/if}
     </div>
@@ -176,7 +168,7 @@
     display: flex;
     flex-direction: column;
     animation: slide-in 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-    font-family: 'Geist Mono', monospace;
+    font-family: var(--font-mono);
     box-shadow: -8px 0 32px rgba(0,0,0,0.2);
   }
   @keyframes slide-in {
@@ -204,7 +196,7 @@
     border-radius: 3px;
     color: var(--fg-dim);
     padding: 3px 10px;
-    font-family: 'Geist Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 11px;
     cursor: pointer;
     transition: all 0.15s;
@@ -236,6 +228,11 @@
   .breadcrumb-item {
     cursor: pointer;
     transition: color 0.12s;
+    background: none;
+    border: none;
+    color: var(--muted);
+    font: inherit;
+    padding: 0;
   }
   .breadcrumb-item:hover { color: var(--accent-soft); }
 
@@ -275,7 +272,12 @@
     font-size: 11px;
     color: var(--fg-dim);
     transition: background 0.15s, color 0.15s;
+    border: none;
     border-bottom: 1px solid var(--border);
+    background: none;
+    width: 100%;
+    text-align: left;
+    font: inherit;
   }
   .file-entry:hover { background: var(--surface2); color: var(--fg-bright); }
 

@@ -55,6 +55,30 @@
     return '';
   });
 
+  // One-line result preview shown in collapsed header
+  let resultPreview = $derived.by(() => {
+    if (!parsed || tc.status === 'running') return '';
+    if (isError) return parsed.error ? truncate(parsed.error, 40) : 'error';
+    const n = tc.name?.toLowerCase();
+    if (n === 'bash') {
+      const code = parsed.exit_code;
+      if (code === 0) return 'exit 0';
+      return `exit ${code ?? '?'}`;
+    }
+    if (n === 'read') return parsed.total_lines ? `${parsed.total_lines} lines` : 'ok';
+    if (n === 'grep') {
+      const count = parsed.count ?? parsed.matches?.length ?? 0;
+      return `${count} match${count !== 1 ? 'es' : ''}`;
+    }
+    if (n === 'glob') {
+      const total = parsed.total ?? parsed.files?.length ?? 0;
+      return `${total} file${total !== 1 ? 's' : ''}`;
+    }
+    if (n === 'edit') return parsed.status === 'ok' ? `${parsed.replacements} replaced` : '';
+    if (n === 'write') return parsed.status === 'ok' ? `${parsed.bytes}B` : '';
+    return 'done';
+  });
+
   function shortenPath(p) {
     if (!p) return '';
     const parts = p.replace(/\\/g, '/').split('/');
@@ -92,23 +116,21 @@
   }
 </script>
 
-<!-- svelte-ignore a11y_click_events_have_key_events -->
-<!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="tool-block" class:expanded>
-  <div class="tool-header" onclick={toggle}>
-    <div class="tool-status-icon" class:running={tc.status === 'running'} class:done={tc.status === 'done'} class:error={tc.status === 'error'}>
-      {#if tc.status === 'running'}&#8635;{:else if tc.status === 'error'}&#10005;{:else}&#10003;{/if}
-    </div>
+<div class="tool-block" class:expanded role="region" aria-label="{tc.name} tool call">
+  <button class="tool-header" onclick={toggle} aria-expanded={expanded}>
+    <div class="tool-status-dot" class:running={tc.status === 'running'} class:done={tc.status === 'done'} class:error={tc.status === 'error'}></div>
     <span class="tool-name">{tc.name}</span>
     {#if headerSummary}
       <span class="tool-summary">{headerSummary}</span>
     {/if}
-    <span class="tool-type-badge {badge.cls}">{badge.label}</span>
+    {#if resultPreview}
+      <span class="tool-result-preview" class:error={isError}>{resultPreview}</span>
+    {/if}
     {#if tc.duration}
       <span class="tool-duration">{tc.duration}s</span>
     {/if}
     <span class="tool-chevron">&#9660;</span>
-  </div>
+  </button>
 
   <div class="tool-body">
     {#if streamText && tc.status === 'running'}
@@ -286,96 +308,85 @@
 
 <style>
   .tool-block {
-    border: 1px solid var(--border2);
-    border-radius: 6px;
+    border: none;
+    border-radius: 0;
     overflow: hidden;
-    background: var(--surface);
-    font-family: 'Geist Mono', monospace;
-    transition: border-color 0.2s ease, box-shadow 0.2s ease;
-  }
-  .tool-block:hover {
-    border-color: var(--muted);
-    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    background: transparent;
+    font-family: var(--font-mono);
   }
 
   .tool-header {
-    padding: 5px 10px;
+    padding: 5px 4px;
     display: flex;
     align-items: center;
     gap: 8px;
     cursor: pointer;
     transition: background 0.15s ease;
+    width: 100%;
+    background: none;
+    border: none;
+    color: inherit;
+    font: inherit;
+    text-align: left;
   }
-  .tool-header:hover { background: var(--surface2); }
+  .tool-header:hover { background: var(--surface2); border-radius: 4px; }
 
-  .tool-status-icon {
-    width: 16px; height: 16px;
+  .tool-status-dot {
+    width: 6px; height: 6px;
     border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 11px;
     flex-shrink: 0;
   }
-  .tool-status-icon.running {
-    background: var(--amber-soft);
-    border: 1px solid var(--amber);
-    animation: spin-slow 1.5s linear infinite;
+  .tool-status-dot.running {
+    background: var(--amber);
+    animation: dot-pulse 1.2s ease-in-out infinite;
   }
-  .tool-status-icon.done {
-    background: var(--green-soft);
-    border: 1px solid var(--green);
-    color: var(--green);
+  .tool-status-dot.done {
+    background: var(--green);
   }
-  .tool-status-icon.error {
-    background: var(--red-soft);
-    border: 1px solid var(--red);
-    color: var(--red);
+  .tool-status-dot.error {
+    background: var(--red);
   }
-  @keyframes spin-slow {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
+  @keyframes dot-pulse {
+    0%, 100% { opacity: 0.3; }
+    50% { opacity: 1; }
   }
 
   .tool-name {
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--fg-bright);
-    letter-spacing: 0.04em;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--fg-dim);
   }
 
-  .tool-type-badge {
-    font-size: 11px;
-    padding: 2px 7px;
-    border-radius: 3px;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    font-weight: 500;
+  .tool-result-preview {
+    font-size: 12px;
+    color: var(--muted);
+    flex-shrink: 0;
   }
-  .tool-type-badge.bash { background: var(--amber-soft); color: var(--amber); border: 1px solid rgba(245,158,11,0.3); }
-  .tool-type-badge.python { background: var(--blue-soft); color: var(--blue); border: 1px solid rgba(56,189,248,0.3); }
-  .tool-type-badge.read { background: var(--blue-soft); color: var(--blue); border: 1px solid rgba(56,189,248,0.3); }
-  .tool-type-badge.write { background: var(--green-soft); color: var(--green); border: 1px solid rgba(16,185,129,0.3); }
-  .tool-type-badge.chart { background: var(--accent-glow); color: var(--accent-soft); border: 1px solid rgba(99,102,241,0.3); }
-  .tool-type-badge.search { background: var(--accent-glow); color: var(--accent-soft); border: 1px solid rgba(99,102,241,0.3); }
-  .tool-type-badge.generic { background: var(--surface2); color: var(--dim); border: 1px solid var(--border2); }
+  .tool-result-preview.error {
+    color: var(--red);
+  }
 
   .tool-duration {
     margin-left: auto;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--muted);
-    letter-spacing: 0.05em;
   }
 
   .tool-chevron {
-    font-size: 11px;
+    font-size: 10px;
     color: var(--muted);
     transition: transform 0.2s;
-    margin-left: 4px;
+    margin-left: 2px;
   }
   .tool-block.expanded .tool-chevron { transform: rotate(180deg); }
 
   .tool-body {
     display: none;
     border-top: 1px solid var(--border);
+    background: var(--surface);
+    border-radius: 6px;
+    margin-top: 4px;
+    overflow: hidden;
   }
   .tool-block.expanded .tool-body { display: block; }
 
@@ -403,7 +414,7 @@
     border-radius: 3px;
     cursor: pointer;
     font-size: 11px;
-    font-family: 'Geist Mono', monospace;
+    font-family: var(--font-mono);
     letter-spacing: 0.05em;
     transition: all 0.12s;
   }
@@ -434,7 +445,6 @@
     50% { opacity: 0; }
   }
 
-  .tool-result-err { color: var(--red); }
   .tool-result-ok { color: var(--fg-dim); }
 
   /* Header summary (file path, command preview) */
@@ -622,7 +632,7 @@
     border: none;
     border-top: 1px solid var(--border);
     color: var(--muted);
-    font-family: 'Geist Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 10px;
     letter-spacing: 0.08em;
     padding: 5px 0;
