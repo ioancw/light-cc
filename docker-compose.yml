@@ -3,13 +3,19 @@ version: "3.9"
 services:
   app:
     build: .
+    entrypoint: ["/bin/bash", "/app/scripts/entrypoint.sh"]
     ports:
-      - "8000:8000"
+      - "${PORT:-8000}:8000"
     environment:
       DATABASE_URL: "postgresql+asyncpg://lightcc:lightcc@postgres:5432/lightcc"
       REDIS_URL: "redis://redis:6379/0"
-      JWT_SECRET: "${JWT_SECRET:-change-me-in-production}"
+      JWT_SECRET: "${JWT_SECRET:?Set JWT_SECRET in .env}"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      ADMIN_EMAIL: "${ADMIN_EMAIL:-}"
+      ADMIN_PASSWORD: "${ADMIN_PASSWORD:-}"
+      ADMIN_NAME: "${ADMIN_NAME:-Admin}"
+      ENV: "production"
     depends_on:
       postgres:
         condition: service_healthy
@@ -17,11 +23,17 @@ services:
         condition: service_healthy
     volumes:
       - app-data:/app/data
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2.0"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/health/ready"]
       interval: 10s
       timeout: 5s
       retries: 3
+      start_period: 15s
     restart: unless-stopped
 
   postgres:

@@ -28,3 +28,4 @@ opentelemetry-instrumentation-fastapi>=0.41b0
 prometheus-client>=0.20
 boto3>=1.34
 croniter>=2.0
+psutil>=5.9

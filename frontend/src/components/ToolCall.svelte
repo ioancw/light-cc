@@ -264,31 +264,7 @@
       </div>
     {/if}
 
-    {#if tc.images && tc.images.length > 0}
-      <div class="tool-section">
-        <div class="tool-section-label">Images</div>
-        <div class="tool-images">
-          {#each tc.images as img}
-            <Image src={img.data} alt={img.name || 'output'} mime={img.mime} />
-          {/each}
-        </div>
-      </div>
-    {/if}
-
-    {#if tc.tables && tc.tables.length > 0}
-      <div class="tool-section">
-        <div class="tool-section-label">Tables</div>
-        {#each tc.tables as html}
-          <Table {html} />
-        {/each}
-      </div>
-    {/if}
-
-    {#if tc.chart}
-      <div class="tool-section">
-        <Chart plotlyJson={tc.chart.plotlyJson} title={tc.chart.title} />
-      </div>
-    {/if}
+    <!-- Charts, images, and tables render inline in MessageBubble -->
 
     {#if tc.embeds && tc.embeds.length > 0}
       <div class="tool-section">

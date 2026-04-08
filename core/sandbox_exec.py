@@ -1,14 +1,22 @@
-"""Sandboxed subprocess execution — sanitized environment for tool commands."""
+"""Sandboxed subprocess execution — sanitized environment for tool commands.
+
+When running inside a container on Linux, bash commands are prefixed with
+``unshare --net`` for network isolation. Scheduled tasks use a tighter timeout.
+"""
 
 from __future__ import annotations
 
+import logging
 import os
+import platform
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
 from core.session import current_session_get
+
+_logger = logging.getLogger(__name__)
 
 # Keys that are safe to pass through to subprocesses
 _ENV_WHITELIST = {
@@ -41,6 +49,32 @@ _ENV_BLOCKLIST = {
 }
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+# Scheduled tasks use a tighter timeout than interactive commands
+SCHEDULED_TASK_TIMEOUT = 60
+
+
+def is_containerized() -> bool:
+    """Detect if we are running inside a Docker/container environment."""
+    if Path("/.dockerenv").exists():
+        return True
+    try:
+        cgroup = Path("/proc/1/cgroup").read_text()
+        if "docker" in cgroup or "containerd" in cgroup or "kubepods" in cgroup:
+            return True
+    except (FileNotFoundError, PermissionError):
+        pass
+    return False
+
+
+def check_sandbox_warnings() -> None:
+    """Log warnings at startup if production environment lacks container isolation."""
+    env = os.environ.get("ENV", os.environ.get("ENVIRONMENT", "dev")).lower()
+    if env in ("production", "prod") and not is_containerized():
+        _logger.warning(
+            "Running in production without container isolation. "
+            "Deploy with Docker or Kubernetes for proper sandboxing."
+        )
 
 
 def _build_safe_env(
@@ -117,9 +151,15 @@ def run_shell_command(
     env = _build_safe_env(output_dir=_get_user_output_dir())
     cwd = _get_user_cwd()
 
+    # Network isolation: when running inside a container on Linux, prefix
+    # the command with unshare --net to prevent network access from tool calls.
+    actual_command = command
+    if platform.system() == "Linux" and is_containerized():
+        actual_command = f"unshare --net -- {command}"
+
     try:
         result = subprocess.run(
-            command,
+            actual_command,
             shell=True,
             capture_output=True,
             env=env,

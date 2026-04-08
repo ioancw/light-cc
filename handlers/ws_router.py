@@ -13,11 +13,11 @@ from typing import Any
 
 from fastapi import WebSocket, WebSocketDisconnect
 
-from core.auth import decode_token, get_user_by_id
+from core.auth import decode_token, get_user_by_id, is_token_revoked
 from core.config import settings
 from core.database import get_db
 from core.hooks import fire_hooks, has_hooks
-from core.rate_limit import check_rate_limit, check_ws_connect
+from core.rate_limit import check_rate_limit, check_rate_limit_async, check_ws_connect
 from core.session import (
     _conv_sessions,
     connection_get,
@@ -50,6 +50,14 @@ async def websocket_endpoint(
     outputs_dir,
 ) -> None:
     """Main WebSocket handler -- authenticates, dispatches events, cleans up."""
+    # Origin validation
+    allowed_origins = settings.server.allowed_origins
+    if "*" not in allowed_origins:
+        origin = ws.headers.get("origin", "")
+        if origin and origin not in allowed_origins:
+            await ws.close(code=4003, reason="Origin not allowed")
+            return
+
     # Rate limit connections per IP before accepting
     client_ip = ws.client.host if ws.client else "unknown"
     allowed, reason = check_ws_connect(client_ip)
@@ -58,15 +66,31 @@ async def websocket_endpoint(
         return
     await ws.accept()
 
-    # ── Authenticate via token query param ──
+    # ── Authenticate ──
+    # Prefer first-message auth; fall back to query param (deprecated)
     token = ws.query_params.get("token")
     user_id = "default"
     user_email = ""
     user_display_name = "User"
 
     if token:
+        logger.warning("WebSocket auth via query param is deprecated; send token in first message instead")
+
+    # If no query param token, wait for an auth message
+    if not token:
+        try:
+            first_msg = await asyncio.wait_for(ws.receive_json(), timeout=10.0)
+            if first_msg.get("type") == "auth":
+                token = first_msg.get("data", {}).get("token") or first_msg.get("token")
+        except (asyncio.TimeoutError, Exception):
+            pass
+
+    if token:
         payload = decode_token(token)
         if payload and payload.get("type") == "access":
+            if await is_token_revoked(token):
+                await ws.close(code=4001, reason="Token has been revoked")
+                return
             user_id = payload["sub"]
             user_email = payload.get("email", "")
             db = await get_db()
@@ -121,8 +145,8 @@ async def websocket_endpoint(
     async def task_notify(event_type: str, data: dict[str, Any]) -> None:
         await send_event(event_type, data)
 
-    set_notification_callback(bg_notify)
-    set_task_notify_callback(task_notify)
+    set_notification_callback(bg_notify, session_id=session_id)
+    set_task_notify_callback(task_notify, session_id=session_id)
 
     # ── Send connected event ──
     skills_for_client = [
@@ -155,7 +179,7 @@ async def websocket_endpoint(
             await send_event("error", {"message": "Missing cid"})
             return
 
-        allowed, reason = check_rate_limit(user_id, "message")
+        allowed, reason = await check_rate_limit_async(user_id, "message")
         if not allowed:
             await send_event("error", {"message": reason}, cid=cid)
             return
@@ -168,7 +192,25 @@ async def websocket_endpoint(
             await send_event("error", {"message": "This conversation is already generating."}, cid=cid)
             return
 
-        get_or_create_conv_session(cid, session_id)
+        cs = get_or_create_conv_session(cid, session_id)
+
+        # If this session has no conversation_id but the cid references a server
+        # conversation (e.g. after WS reconnect), recover from DB to avoid
+        # creating a duplicate conversation.
+        if cs.get("conversation_id") is None and not cs.get("messages"):
+            # The frontend sends cids like "srv_<server_id>" for server-loaded convs
+            server_id = cid[4:] if cid.startswith("srv_") else None
+            # Also check if data contains a conversation_id hint
+            if not server_id:
+                server_id = data.get("conversation_id")
+            if server_id:
+                try:
+                    messages = await load_conversation(server_id)
+                    if messages is not None:
+                        cs["messages"] = messages
+                        cs["conversation_id"] = server_id
+                except Exception as e:
+                    logger.debug(f"Failed to recover conversation {server_id}: {e}")
         scoped_send = make_send_event(cid)
         cid_perms = pending_permissions.setdefault(cid, {})
         task = asyncio.create_task(
@@ -400,6 +442,25 @@ async def websocket_endpoint(
                 await _handle_generate_title(cid)
             elif event_type == "summarize_context":
                 await _handle_summarize_context(cid)
+            elif event_type == "retry":
+                # Retry: remove last assistant message and re-send the last user message
+                if cid:
+                    msgs = conv_session_get(cid, "messages") or []
+                    # Pop trailing assistant message(s) to get back to the last user turn
+                    while msgs and msgs[-1].get("role") != "user":
+                        msgs.pop()
+                    if msgs:
+                        last_user = msgs[-1]
+                        text = last_user.get("content", "")
+                        if isinstance(text, list):
+                            text = " ".join(
+                                b.get("text", "") for b in text
+                                if isinstance(b, dict) and b.get("type") == "text"
+                            )
+                        conv_session_set(cid, "messages", msgs)
+                        await _handle_user_msg(cid, {"text": text})
+                    else:
+                        await send_event("error", {"message": "No message to retry"}, cid=cid)
             elif event_type == "set_model":
                 await _handle_set_model(cid, data)
             elif event_type == "rollback_compression":
@@ -437,6 +498,10 @@ async def websocket_endpoint(
             except Exception:
                 pass
         unregister_user_sender(user_id, send_event)
+        from tools.subagent import remove_notification_callback
+        from tools.tasks import remove_task_notify_callback
+        remove_notification_callback(session_id)
+        remove_task_notify_callback(session_id)
         from core.checkpoints import clear_checkpoints
         for active_cid in list(get_connection_cids(session_id)):
             clear_checkpoints(active_cid)

@@ -9,13 +9,27 @@ from typing import Any, Awaitable, Callable
 from tools.registry import register_tool
 from core.session import current_session_get, current_session_set
 
-# Optional callback for pushing task updates to the UI (set by server.py)
-_notify_callback: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None
+# Per-session callbacks for pushing task updates to the UI (set by ws_router.py)
+_notify_callbacks: dict[str, Callable[[str, dict[str, Any]], Awaitable[None]]] = {}
 
 
-def set_task_notify_callback(cb: Callable[[str, dict[str, Any]], Awaitable[None]]) -> None:
-    global _notify_callback
-    _notify_callback = cb
+def set_task_notify_callback(cb: Callable[[str, dict[str, Any]], Awaitable[None]], *, session_id: str | None = None) -> None:
+    if session_id:
+        _notify_callbacks[session_id] = cb
+    else:
+        _notify_callbacks["_default"] = cb
+
+
+def remove_task_notify_callback(session_id: str) -> None:
+    _notify_callbacks.pop(session_id, None)
+
+
+def _get_notify_callback() -> Callable[[str, dict[str, Any]], Awaitable[None]] | None:
+    from core.session import _current_session_id
+    sid = _current_session_id.get(None)
+    if sid and sid in _notify_callbacks:
+        return _notify_callbacks[sid]
+    return _notify_callbacks.get("_default")
 
 
 def _get_tasks() -> dict[str, dict[str, str]]:
@@ -36,6 +50,7 @@ async def handle_create_task(tool_input: dict[str, Any]) -> str:
     task_id = str(uuid.uuid4())[:8]
     tasks[task_id] = {"title": title, "status": status}
 
+    _notify_callback = _get_notify_callback()
     if _notify_callback:
         await _notify_callback("task_update", {
             "task_id": task_id, "title": title, "status": status,
@@ -56,6 +71,7 @@ async def handle_update_task(tool_input: dict[str, Any]) -> str:
 
     tasks[task_id]["status"] = status
 
+    _notify_callback = _get_notify_callback()
     if _notify_callback:
         await _notify_callback("task_update", {
             "task_id": task_id,

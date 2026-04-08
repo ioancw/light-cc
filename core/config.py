@@ -33,6 +33,15 @@ class ServerConfig(BaseModel):
     host: str = "0.0.0.0"
     port: int = 8000
     frontend: str = "classic"  # "classic" or "svelte"
+    allowed_origins: list[str] = Field(default_factory=lambda: ["*"])
+
+
+class ProviderConfig(BaseModel):
+    """Configuration for an external model provider."""
+    name: str  # e.g., "openai", "ollama"
+    api_key_env: str | None = None  # env var name for the API key
+    base_url: str | None = None  # custom base URL (e.g., for Ollama)
+    models: list[str] = Field(default_factory=list)  # model names this provider handles
 
 
 class AuthConfig(BaseModel):
@@ -66,6 +75,7 @@ class Settings(BaseModel):
     s3_bucket: str | None = Field(default_factory=lambda: os.environ.get("S3_BUCKET"))
     s3_region: str = Field(default_factory=lambda: os.environ.get("S3_REGION", "us-east-1"))
     s3_prefix: str = "lightcc/"
+    providers: list[ProviderConfig] = Field(default_factory=list)
     paths: PathsConfig = Field(default_factory=PathsConfig)
     server: ServerConfig = Field(default_factory=ServerConfig)
     auth: AuthConfig = Field(default_factory=AuthConfig)

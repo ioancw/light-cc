@@ -8,7 +8,8 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket
+import fastapi
+from fastapi import FastAPI, Request, WebSocket
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -181,6 +182,41 @@ if settings.server.frontend == "svelte":
 async def startup():
     setup_logging()
     setup_telemetry()
+
+    # Instrument FastAPI with OpenTelemetry if available
+    try:
+        from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+        FastAPIInstrumentor.instrument_app(app)
+        logger.info("FastAPI OpenTelemetry instrumentation enabled")
+    except ImportError:
+        pass
+    except Exception as e:
+        logger.debug(f"FastAPI instrumentation failed: {e}")
+
+    # Auto-run Alembic migrations for PostgreSQL deployments
+    # Uses an advisory lock to prevent race conditions in multi-replica deploys
+    if "postgresql" in settings.database_url:
+        try:
+            from sqlalchemy import text, create_engine
+            sync_url = settings.database_url.replace("+asyncpg", "")
+            sync_engine = create_engine(sync_url)
+            with sync_engine.connect() as conn:
+                # pg_advisory_lock with a fixed key prevents concurrent migrations
+                conn.execute(text("SELECT pg_advisory_lock(42)"))
+                try:
+                    from alembic.config import Config as AlembicConfig
+                    from alembic import command as alembic_command
+                    alembic_cfg = AlembicConfig(str(_PROJECT_ROOT / "alembic.ini"))
+                    alembic_cfg.set_main_option("script_location", str(_PROJECT_ROOT / "alembic"))
+                    alembic_command.upgrade(alembic_cfg, "head")
+                    logger.info("Alembic migrations applied successfully")
+                finally:
+                    conn.execute(text("SELECT pg_advisory_unlock(42)"))
+                    conn.commit()
+            sync_engine.dispose()
+        except Exception as e:
+            logger.warning(f"Auto-migration failed (run 'alembic upgrade head' manually): {e}")
+
     await init_db()
     await init_redis()
     await init_job_queue()
@@ -202,9 +238,18 @@ async def startup():
     from core.scheduler import start_scheduler
     await start_scheduler()
 
+    from core.session import start_session_flush
+    await start_session_flush()
+
+    from core.sandbox_exec import check_sandbox_warnings
+    check_sandbox_warnings()
+
 
 @app.on_event("shutdown")
 async def shutdown():
+    from core.session import stop_session_flush
+    await stop_session_flush()
+
     from core.plugin_loader import get_plugin_loader
     await get_plugin_loader().unload_all()
     from core.mcp_client import get_mcp_manager
@@ -220,7 +265,8 @@ async def shutdown():
 
 @app.get("/health")
 async def health():
-    """Health check -- verifies DB and Redis connectivity."""
+    """Full health check -- verifies DB and Redis connectivity."""
+    from fastapi.responses import JSONResponse
     checks: dict[str, str] = {}
     try:
         from sqlalchemy import text
@@ -236,15 +282,62 @@ async def health():
     except Exception as e:
         checks["redis"] = f"error: {e}"
 
+    # Active session and memory info
+    import psutil
+    try:
+        proc = psutil.Process()
+        checks["memory_mb"] = str(round(proc.memory_info().rss / 1024 / 1024, 1))
+    except Exception:
+        checks["memory_mb"] = "unknown"
+
+    try:
+        from core.session import _connections
+        checks["active_sessions"] = str(len(_connections))
+    except Exception:
+        checks["active_sessions"] = "unknown"
+
     healthy = checks["database"] == "ok"
     status_code = 200 if healthy else 503
-    from fastapi.responses import JSONResponse
     return JSONResponse({"status": "healthy" if healthy else "unhealthy", "checks": checks}, status_code=status_code)
 
 
+@app.get("/health/live")
+async def health_live():
+    """Liveness probe -- always returns 200 if the process is running."""
+    return {"status": "alive"}
+
+
+@app.get("/health/ready")
+async def health_ready():
+    """Readiness probe -- returns 200 only if DB and Redis are reachable."""
+    from fastapi.responses import JSONResponse
+    try:
+        from sqlalchemy import text
+        db = await get_db()
+        await db.execute(text("SELECT 1"))
+        await db.close()
+    except Exception as e:
+        return JSONResponse({"status": "not_ready", "reason": f"database: {e}"}, status_code=503)
+
+    try:
+        from core.redis_store import is_available, _pool
+        if _pool:
+            await _pool.ping()
+    except Exception as e:
+        return JSONResponse({"status": "not_ready", "reason": f"redis: {e}"}, status_code=503)
+
+    return {"status": "ready"}
+
+
 @app.get("/metrics")
-async def metrics():
-    """Prometheus metrics endpoint."""
+async def metrics(request: Request):
+    """Prometheus metrics endpoint. Restricted to localhost unless metrics_public is set."""
+    client_ip = request.client.host if request.client else ""
+    is_local = client_ip in ("127.0.0.1", "::1", "localhost")
+    metrics_public = getattr(settings.server, "metrics_public", False)
+    if not is_local and not metrics_public:
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"error": "Forbidden"}, status_code=403)
     try:
         from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
         from fastapi.responses import Response

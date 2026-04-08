@@ -144,6 +144,7 @@ async def update_conversation(
             select(Conversation).where(
                 Conversation.id == conversation_id,
                 Conversation.user_id == user.id,
+                Conversation.is_deleted == False,
             )
         )
         conv = result.scalar_one_or_none()

@@ -80,15 +80,16 @@ class PluginLoader:
             except Exception as e:
                 logger.error(f"Plugin '{name}': failed to load MCP config: {e}")
 
-        # 2. Load commands from commands/ directory
+        # 2. Load commands from commands/ directory (namespaced as plugin-name:command-name)
         commands_dir = plugin_dir / "commands"
         if commands_dir.exists():
-            from commands.registry import load_commands
-            load_commands(commands_dir)
-            # Track loaded commands
             from commands.loader import discover_commands
+            from commands.registry import _COMMANDS
             for cmd in discover_commands(commands_dir):
-                info.commands.append(cmd.name)
+                namespaced = f"{name}:{cmd.name}"
+                cmd.name = namespaced
+                _COMMANDS[namespaced] = cmd
+                info.commands.append(namespaced)
 
         # 3. Load skills from skills/ directory (namespaced as plugin-name:skill-name)
         skills_dir = plugin_dir / "skills"
@@ -132,7 +133,7 @@ class PluginLoader:
         return loaded
 
     async def unload_plugin(self, name: str) -> None:
-        """Disconnect MCP servers for a plugin."""
+        """Disconnect MCP servers, remove commands, and remove skills for a plugin."""
         info = self._plugins.pop(name, None)
         if not info:
             return
@@ -142,6 +143,18 @@ class PluginLoader:
             manager = get_mcp_manager()
             for server_name in info.mcp_servers:
                 await manager.disconnect(server_name)
+
+        # Remove plugin commands from global registry
+        if info.commands:
+            from commands.registry import _COMMANDS
+            for cmd_name in info.commands:
+                _COMMANDS.pop(cmd_name, None)
+
+        # Remove plugin skills from global registry
+        if info.skills:
+            from skills.registry import unregister_skill
+            for skill_name in info.skills:
+                unregister_skill(skill_name)
 
         logger.info(f"Plugin '{name}' unloaded")
 

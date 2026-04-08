@@ -38,13 +38,27 @@ class SubAgentState:
 
 _active_agents: dict[str, SubAgentState] = {}
 
-# Optional callback for pushing notifications to the UI (set by ws_router.py)
-_notify_callback: Callable[[str, str], Awaitable[None]] | None = None
+# Per-session callbacks for pushing notifications to the UI (set by ws_router.py)
+_notify_callbacks: dict[str, Callable[[str, str], Awaitable[None]]] = {}
 
 
-def set_notification_callback(cb: Callable[[str, str], Awaitable[None]]) -> None:
-    global _notify_callback
-    _notify_callback = cb
+def set_notification_callback(cb: Callable[[str, str], Awaitable[None]], *, session_id: str | None = None) -> None:
+    if session_id:
+        _notify_callbacks[session_id] = cb
+    else:
+        _notify_callbacks["_default"] = cb
+
+
+def remove_notification_callback(session_id: str) -> None:
+    _notify_callbacks.pop(session_id, None)
+
+
+def _get_notify_callback() -> Callable[[str, str], Awaitable[None]] | None:
+    from core.session import _current_session_id
+    sid = _current_session_id.get(None)
+    if sid and sid in _notify_callbacks:
+        return _notify_callbacks[sid]
+    return _notify_callbacks.get("_default")
 
 
 def _cleanup_agents() -> None:
@@ -184,6 +198,7 @@ async def _run_background_agent(state: SubAgentState, prompt: str, **kwargs: Any
         state.result = result
         state.messages = messages
 
+        _notify_callback = _get_notify_callback()
         if _notify_callback:
             label = state.description or f"Agent ({state.agent_type})"
             await _notify_callback(
@@ -194,6 +209,7 @@ async def _run_background_agent(state: SubAgentState, prompt: str, **kwargs: Any
         state.status = "failed"
         state.result = str(e)
 
+        _notify_callback = _get_notify_callback()
         if _notify_callback:
             label = state.description or f"Agent ({state.agent_type})"
             await _notify_callback(

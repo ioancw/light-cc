@@ -5,6 +5,10 @@ Two-tier model:
   - Conversation state (per cid): messages, conversation_id, active_model, datasets, etc.
 
 Multiple conversations can run in parallel on a single WebSocket connection.
+
+Conversation state uses a write-through cache: local dict for fast access,
+async flush to Redis for cross-instance recovery. DataFrames in 'datasets'
+remain node-affine (not serialized to Redis).
 """
 
 from __future__ import annotations
@@ -27,6 +31,12 @@ _conn_convs: dict[str, set[str]] = {}         # session_id -> set of cids
 # ── Conversation-level state (one per cid) ───────────────────────────
 
 _conv_sessions: dict[str, dict[str, Any]] = {}  # cid -> conversation state
+
+# ── Dirty tracking for Redis write-through ──────────────────────────
+
+_dirty_cids: set[str] = set()
+_flush_task: asyncio.Task | None = None
+_FLUSH_INTERVAL = 5  # seconds
 
 # ── ContextVars (per async task) ─────────────────────────────────────
 
@@ -115,9 +125,41 @@ def create_conv_session(cid: str, session_id: str) -> dict[str, Any]:
 
 
 def get_or_create_conv_session(cid: str, session_id: str) -> dict[str, Any]:
-    """Get an existing conversation sub-session or lazily create one."""
+    """Get an existing conversation sub-session or lazily create one.
+
+    Checks local dict first, then attempts Redis recovery before creating new.
+    """
     if cid in _conv_sessions:
         return _conv_sessions[cid]
+
+    # Try Redis recovery (async called from sync — schedule if possible)
+    # Note: Redis recovery is best-effort; if not available, create fresh.
+    # For full async recovery, use get_or_create_conv_session_async().
+    return create_conv_session(cid, session_id)
+
+
+async def get_or_create_conv_session_async(cid: str, session_id: str) -> dict[str, Any]:
+    """Async version that attempts Redis recovery before creating a new session."""
+    if cid in _conv_sessions:
+        return _conv_sessions[cid]
+
+    # Try Redis recovery
+    from core.redis_store import load_conv_session
+    cached = await load_conv_session(cid)
+    if cached:
+        conv = {
+            **{k: (v.copy() if isinstance(v, (list, dict)) else v) for k, v in _CONV_DEFAULTS.items()},
+            "_conn_id": session_id,
+        }
+        # Restore cached state (overwrite defaults with Redis values)
+        for key, val in cached.items():
+            if key in conv:
+                conv[key] = val
+        _conv_sessions[cid] = conv
+        _conn_convs.setdefault(session_id, set()).add(cid)
+        logger.debug("Recovered conversation %s from Redis", cid)
+        return conv
+
     return create_conv_session(cid, session_id)
 
 
@@ -134,14 +176,23 @@ def conv_session_set(cid: str, key: str, value: Any) -> None:
     s = _conv_sessions.get(cid)
     if s is not None:
         s[key] = value
+        _dirty_cids.add(cid)
 
 
 def destroy_conv_session(cid: str) -> None:
     cs = _conv_sessions.pop(cid, None)
+    _dirty_cids.discard(cid)
     if cs:
         conn_id = cs.get("_conn_id")
         if conn_id and conn_id in _conn_convs:
             _conn_convs[conn_id].discard(cid)
+
+
+async def destroy_conv_session_async(cid: str) -> None:
+    """Destroy a conversation session and clean up Redis."""
+    destroy_conv_session(cid)
+    from core.redis_store import delete_conv_session
+    await delete_conv_session(cid)
 
 
 def get_connection_cids(session_id: str) -> set[str]:
@@ -203,6 +254,54 @@ async def sync_session_to_redis(session_id: str) -> None:
     if session:
         from core.redis_store import save_session_state
         await save_session_state(session_id, session)
+
+
+async def _flush_dirty_sessions() -> None:
+    """Periodically flush dirty conversation sessions to Redis."""
+    from core.redis_store import save_conv_session, is_available
+
+    while True:
+        try:
+            await asyncio.sleep(_FLUSH_INTERVAL)
+            if not is_available():
+                continue
+            cids = list(_dirty_cids)
+            _dirty_cids.clear()
+            for cid in cids:
+                cs = _conv_sessions.get(cid)
+                if cs:
+                    await save_conv_session(cid, cs)
+        except asyncio.CancelledError:
+            # Final flush on shutdown
+            if is_available():
+                for cid in list(_dirty_cids):
+                    cs = _conv_sessions.get(cid)
+                    if cs:
+                        await save_conv_session(cid, cs)
+                _dirty_cids.clear()
+            raise
+        except Exception as e:
+            logger.debug(f"Flush dirty sessions failed: {e}")
+
+
+async def start_session_flush() -> None:
+    """Start the background task that flushes dirty sessions to Redis."""
+    global _flush_task
+    if _flush_task is None or _flush_task.done():
+        _flush_task = asyncio.create_task(_flush_dirty_sessions())
+        logger.debug("Session flush task started (interval: %ds)", _FLUSH_INTERVAL)
+
+
+async def stop_session_flush() -> None:
+    """Stop the background flush task."""
+    global _flush_task
+    if _flush_task and not _flush_task.done():
+        _flush_task.cancel()
+        try:
+            await _flush_task
+        except asyncio.CancelledError:
+            pass
+        _flush_task = None
 
 
 # ── Per-cid save locks (prevent interleaved delete+insert) ───────────

@@ -18,6 +18,8 @@ from core.auth import (
     get_user_by_email,
     get_user_by_id,
     hash_password,
+    is_token_revoked,
+    revoke_token,
 )
 from core.config import settings
 from core.database import get_db
@@ -86,6 +88,8 @@ async def get_current_user(creds: HTTPAuthorizationCredentials = Depends(_bearer
     payload = decode_token(creds.credentials)
     if payload is None or payload.get("type") != "access":
         raise HTTPException(status_code=401, detail="Invalid or expired token")
+    if await is_token_revoked(creds.credentials):
+        raise HTTPException(status_code=401, detail="Token has been revoked")
     db = await get_db()
     try:
         user = await get_user_by_id(db, payload["sub"])
@@ -151,6 +155,9 @@ async def refresh(req: RefreshRequest):
     if payload is None or payload.get("type") != "refresh":
         raise HTTPException(status_code=401, detail="Invalid or expired refresh token")
 
+    if await is_token_revoked(req.refresh_token):
+        raise HTTPException(status_code=401, detail="Refresh token has been revoked")
+
     db = await get_db()
     try:
         user = await get_user_by_id(db, payload["sub"])
@@ -160,11 +167,28 @@ async def refresh(req: RefreshRequest):
     if user is None:
         raise HTTPException(status_code=401, detail="User not found")
 
+    # Revoke the old refresh token (token rotation)
+    await revoke_token(req.refresh_token)
+
     return TokenResponse(
         access_token=create_access_token(user.id, user.email),
         refresh_token=create_refresh_token(user.id),
         user=UserResponse(id=user.id, email=user.email, display_name=user.display_name, is_admin=user.is_admin),
     )
+
+
+@router.post("/logout")
+async def logout(creds: HTTPAuthorizationCredentials = Depends(_bearer), body: RefreshRequest | None = None):
+    """Revoke the current access token and optionally the refresh token."""
+    token = creds.credentials
+    payload = decode_token(token)
+    if payload is None:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    revoked_access = await revoke_token(token)
+    revoked_refresh = False
+    if body and body.refresh_token:
+        revoked_refresh = await revoke_token(body.refresh_token)
+    return {"status": "logged_out", "revoked_access": revoked_access, "revoked_refresh": revoked_refresh}
 
 
 @router.get("/me", response_model=UserResponse)

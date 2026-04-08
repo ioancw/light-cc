@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import datetime, timezone
 
@@ -56,7 +57,7 @@ class Message(Base):
     conversation_id: Mapped[str] = mapped_column(String(32), ForeignKey("conversations.id"), nullable=False, index=True)
     role: Mapped[str] = mapped_column(String(20), nullable=False)  # "user" or "assistant"
     content: Mapped[str] = mapped_column(Text, nullable=False)  # JSON-encoded content
-    token_count: Mapped[int] = mapped_column(Integer, nullable=True)
+    token_count: Mapped[int] = mapped_column(Integer, nullable=True)  # deprecated: not populated
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
     conversation: Mapped[Conversation] = relationship(back_populates="messages")
@@ -112,3 +113,47 @@ class ScheduleRun(Base):
     conversation_id: Mapped[str | None] = mapped_column(String(32), ForeignKey("conversations.id"), nullable=True)
 
     schedule: Mapped["Schedule"] = relationship(back_populates="runs")
+
+
+class Memory(Base):
+    """Per-user persistent memory entries (Zettelkasten pattern)."""
+
+    __tablename__ = "memories"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_new_id)
+    user_id: Mapped[str] = mapped_column(String(32), ForeignKey("users.id"), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    memory_type: Mapped[str] = mapped_column(String(50), default="note")
+    tags: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON array
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+
+    @property
+    def tags_list(self) -> list[str]:
+        """Parse tags JSON into a Python list."""
+        if not self.tags:
+            return []
+        try:
+            return json.loads(self.tags)
+        except (json.JSONDecodeError, TypeError):
+            return []
+
+    @tags_list.setter
+    def tags_list(self, value: list[str]) -> None:
+        self.tags = json.dumps(value) if value else None
+
+
+class AuditEvent(Base):
+    """Audit log for tool executions (Phase 3 security)."""
+
+    __tablename__ = "audit_events"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_new_id)
+    user_id: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    tool_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    tool_input_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    result_summary: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    success: Mapped[bool] = mapped_column(Boolean, default=True)
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)

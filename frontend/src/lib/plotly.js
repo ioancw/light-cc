@@ -64,7 +64,7 @@ export async function renderChart(el, plotlyJson) {
     delete layout.width;
     delete layout.height;
 
-    Plotly.newPlot(el, fig.data, layout, { responsive: true, displayModeBar: false });
+    Plotly.newPlot(el, fig.data, layout, { responsive: true, displayModeBar: true, modeBarButtonsToRemove: ['lasso2d', 'select2d'] });
   } catch (e) {
     console.error('Plotly render error:', e);
   }

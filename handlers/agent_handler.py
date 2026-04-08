@@ -32,6 +32,7 @@ from core.session import (
 from commands.registry import get_command, list_commands
 from handlers.commands import handle_plugin_command, handle_schedule_command
 from handlers.media import send_chart_if_any, send_images_if_any, send_tables_if_any
+from core.telemetry import async_trace_span, record_error
 from memory.manager import ensure_user_dirs, load_memory, set_current_user
 from skills.registry import list_skills, match_skill_by_intent, match_skill_by_name
 from tools.registry import get_all_tool_schemas, get_tool_schemas
@@ -60,8 +61,9 @@ async def generate_title(messages: list[dict[str, Any]]) -> str:
         + "\n".join(text_parts)
     )
     try:
+        title_model = settings.title_model if hasattr(settings, "title_model") and settings.title_model else "claude-haiku-4-5-20251001"
         resp = await client.messages.create(
-            model="claude-haiku-4-5-20251001",
+            model=title_model,
             max_tokens=30,
             messages=[{"role": "user", "content": prompt}],
         )
@@ -130,7 +132,7 @@ async def handle_user_message(
 
     messages.append({"role": "user", "content": data["text"]})
 
-    memory_context = load_memory(user_id)
+    memory_context = await load_memory(user_id)
     user_system_prompt = connection_get(session_id, "user_system_prompt") or ""
 
     # Load project config (CLAUDE.md) and rules -- cached per session
@@ -180,7 +182,7 @@ async def handle_user_message(
                 tools=tool_schemas,
                 project_config=connection_get(session_id, "project_config") or "",
                 rules_text=get_active_rules(connection_get(session_id, "project_rules") or [], conv_session_get(cid, "active_files") or []),
-                memory_context=load_memory(user_id),
+                memory_context=await load_memory(user_id),
             )
             lines = [
                 "**Context Window Usage**",
@@ -311,7 +313,7 @@ async def handle_user_message(
         is_error = False
         try:
             parsed = json.loads(result)
-            if isinstance(parsed, dict) and "error" in parsed:
+            if isinstance(parsed, dict) and parsed.get("error"):
                 is_error = True
         except (json.JSONDecodeError, TypeError):
             pass
@@ -359,7 +361,7 @@ async def handle_user_message(
             return result
         # result is None -- ask the user
         req_id = f"perm_{uuid.uuid4().hex[:8]}"
-        future: asyncio.Future[bool] = asyncio.get_event_loop().create_future()
+        future: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
         pending_permissions[req_id] = future
 
         await send_event("permission_request", {
@@ -382,16 +384,17 @@ async def handle_user_message(
     active_model = conv_session_get(cid, "active_model") or None
 
     try:
-        messages = await agent.run(
-            messages=messages,
-            tools=tool_schemas,
-            system=system,
-            on_text=on_text,
-            on_tool_start=on_tool_start_wrapper,
-            on_tool_end=on_tool_end_wrapper,
-            on_permission_check=on_permission_check,
-            model=active_model,
-        )
+        async with async_trace_span("agent.handle_message", user_id=user_id, cid=cid):
+            messages = await agent.run(
+                messages=messages,
+                tools=tool_schemas,
+                system=system,
+                on_text=on_text,
+                on_tool_start=on_tool_start_wrapper,
+                on_tool_end=on_tool_end_wrapper,
+                on_permission_check=on_permission_check,
+                model=active_model,
+            )
         conv_session_set(cid, "messages", messages)
         conv_id = await save_conversation(cid)
         usage_data = {}
@@ -415,4 +418,5 @@ async def handle_user_message(
         await send_event("generation_cancelled", {})
     except Exception as e:
         logger.error(f"Agent error: {e}", exc_info=True)
+        record_error("agent")
         await send_event("error", {"message": str(e)})

@@ -18,6 +18,11 @@ def register_skill(skill: SkillDef) -> None:
     _SKILLS[skill.name] = skill
 
 
+def unregister_skill(name: str) -> None:
+    """Remove a skill by name."""
+    _SKILLS.pop(name, None)
+
+
 def load_skills(skills_dir: str | Path) -> None:
     """Discover and register skills from a directory. Accumulates across calls."""
     skills = discover_skills(skills_dir)

@@ -21,6 +21,16 @@ async def init_db() -> None:
     For SQLite (dev): uses create_all for convenience.
     For PostgreSQL (prod): expects Alembic migrations to be run separately.
     """
+    # Instrument SQLAlchemy with OpenTelemetry if available
+    try:
+        from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
+        SQLAlchemyInstrumentor().instrument(engine=_engine.sync_engine)
+        logger.info("SQLAlchemy OpenTelemetry instrumentation enabled")
+    except ImportError:
+        pass
+    except Exception as e:
+        logger.debug(f"SQLAlchemy instrumentation failed: {e}")
+
     if "sqlite" in settings.database_url:
         async with _engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)

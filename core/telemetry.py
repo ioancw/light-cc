@@ -6,6 +6,8 @@ and degrade gracefully if their dependencies are missing.
 
 from __future__ import annotations
 
+import hashlib
+import json as _json
 import logging
 import time
 from contextlib import asynccontextmanager, contextmanager
@@ -67,13 +69,17 @@ def setup_tracing(service_name: str = "light-cc") -> None:
         resource = Resource.create({"service.name": service_name})
         provider = TracerProvider(resource=resource)
 
-        # Try OTLP exporter (sends to Jaeger/Tempo/etc.)
-        try:
-            from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-            from opentelemetry.sdk.trace.export import BatchSpanProcessor
-            provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
-        except ImportError:
-            pass  # No OTLP exporter — tracing still works, just no export
+        # Only add OTLP exporter if OTEL_EXPORTER_OTLP_ENDPOINT is set,
+        # otherwise the exporter spams logs trying to reach localhost:4317
+        import os
+        if os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
+            try:
+                from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+                from opentelemetry.sdk.trace.export import BatchSpanProcessor
+                provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
+                logger.info("OTLP trace exporter enabled")
+            except ImportError:
+                pass
 
         trace.set_tracer_provider(provider)
         _tracer = trace.get_tracer(service_name)
@@ -140,11 +146,13 @@ _metrics_initialized = False
 def setup_metrics() -> None:
     """Initialize Prometheus metrics."""
     global _metrics_initialized
+    if _metrics_initialized:
+        return
     try:
         from prometheus_client import Counter, Histogram, Gauge
 
         global REQUESTS_TOTAL, AGENT_LOOP_DURATION, TOOL_CALLS_TOTAL
-        global TOOL_CALL_DURATION, ACTIVE_SESSIONS, TOKEN_USAGE
+        global TOOL_CALL_DURATION, ACTIVE_SESSIONS, TOKEN_USAGE, ERROR_TOTAL
 
         REQUESTS_TOTAL = Counter(
             "lcc_requests_total",
@@ -177,6 +185,11 @@ def setup_metrics() -> None:
             "Total tokens consumed",
             ["model", "direction"],  # direction: input or output
         )
+        ERROR_TOTAL = Counter(
+            "lcc_errors_total",
+            "Total errors by source",
+            ["source"],  # source: agent, ws, tool, api
+        )
 
         _metrics_initialized = True
         logger.info("Prometheus metrics configured")
@@ -205,8 +218,13 @@ def audit_tool_call(
     tool_input: dict[str, Any],
     success: bool,
     duration: float,
+    *,
+    result_summary: str | None = None,
 ) -> None:
-    """Emit a structured audit log entry for a tool execution."""
+    """Emit a structured audit log entry for a tool execution.
+
+    Also writes to the audit_events DB table if available.
+    """
     input_summary = {}
     for k, v in tool_input.items():
         sv = str(v)
@@ -225,6 +243,56 @@ def audit_tool_call(
             "tool_execution user_id=%s tool=%s success=%s duration=%.3fs",
             user_id, tool_name, success, duration,
         )
+
+    # Write to DB (fire-and-forget via background task)
+    input_hash = hashlib.sha256(_json.dumps(tool_input, sort_keys=True, default=str).encode()).hexdigest()
+    duration_ms = int(duration * 1000)
+    _write_audit_event_bg(user_id, tool_name, input_hash, result_summary, success, duration_ms)
+
+
+def _write_audit_event_bg(
+    user_id: str,
+    tool_name: str,
+    tool_input_hash: str,
+    result_summary: str | None,
+    success: bool,
+    duration_ms: int,
+) -> None:
+    """Schedule a background DB write for the audit event."""
+    import asyncio
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return  # no event loop, skip DB write
+
+    async def _write():
+        try:
+            from core.database import get_db
+            from core.db_models import AuditEvent
+            db = await get_db()
+            try:
+                event = AuditEvent(
+                    user_id=user_id,
+                    tool_name=tool_name,
+                    tool_input_hash=tool_input_hash,
+                    result_summary=(result_summary or "")[:500],
+                    success=success,
+                    duration_ms=duration_ms,
+                )
+                db.add(event)
+                await db.commit()
+            finally:
+                await db.close()
+        except Exception as e:
+            logger.debug(f"Audit event DB write failed: {e}")
+
+    loop.create_task(_write())
+
+
+def record_error(source: str) -> None:
+    """Increment error counter. Source: agent, ws, tool, api."""
+    if _metrics_initialized:
+        ERROR_TOTAL.labels(source=source).inc()
 
 
 def record_tokens(model: str, input_tokens: int, output_tokens: int) -> None:

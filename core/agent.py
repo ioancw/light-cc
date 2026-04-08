@@ -23,6 +23,7 @@ from core.session import current_session_get
 from core.telemetry import (
     record_request, record_tokens, record_tool_call,
     observe_agent_loop, async_trace_span, audit_tool_call,
+    record_error,
 )
 from core.usage import record_usage
 from tools.registry import execute_tool
@@ -73,6 +74,7 @@ async def run(
     while remaining > 0:
         remaining -= 1
         _turn_start = time.monotonic()
+        _turn_number = (max_turns or settings.max_turns) - remaining
 
         # Compress context if approaching limit
         messages = await compress_if_needed(messages, system, tools)
@@ -167,8 +169,9 @@ async def run(
                 break  # success — exit retry loop
             except (_anthropic.RateLimitError, _anthropic.InternalServerError) as exc:
                 if _attempt < _max_retries - 1:
-                    delay = min(1.0 * 2 ** _attempt + random.uniform(0, 0.5), 30.0)
+                    delay = min(2.0 * 2 ** _attempt + random.uniform(0, 1.0), 30.0)
                     logger.warning(f"API error (attempt {_attempt + 1}/{_max_retries}): {exc}. Retrying in {delay:.1f}s")
+                    await on_text(f"\n*API busy, retrying in {delay:.0f}s...*\n")
                     await asyncio.sleep(delay)
                     # Reset buffers for retry
                     assistant_content.clear()
@@ -179,11 +182,14 @@ async def run(
                     pending_text.clear()
                     stream_usage = None
                 else:
+                    record_error("api")
                     raise
             except _anthropic.APIStatusError as exc:
-                if exc.status_code == 529 and _attempt < _max_retries - 1:
-                    delay = min(1.0 * 2 ** _attempt + random.uniform(0, 0.5), 30.0)
+                _retryable = exc.status_code in (429, 503, 529) or "overloaded" in str(exc).lower()
+                if _retryable and _attempt < _max_retries - 1:
+                    delay = min(2.0 * 2 ** _attempt + random.uniform(0, 1.0), 30.0)
                     logger.warning(f"API overloaded (attempt {_attempt + 1}/{_max_retries}): {exc}. Retrying in {delay:.1f}s")
+                    await on_text(f"\n*API overloaded, retrying in {delay:.0f}s...*\n")
                     await asyncio.sleep(delay)
                     assistant_content.clear()
                     tool_calls.clear()
@@ -193,6 +199,23 @@ async def run(
                     pending_text.clear()
                     stream_usage = None
                 else:
+                    record_error("api")
+                    raise
+            except _anthropic.APIConnectionError as exc:
+                if _attempt < _max_retries - 1:
+                    delay = min(2.0 * 2 ** _attempt + random.uniform(0, 1.0), 30.0)
+                    logger.warning(f"API connection error (attempt {_attempt + 1}/{_max_retries}): {exc}. Retrying in {delay:.1f}s")
+                    await on_text(f"\n*Connection error, retrying in {delay:.0f}s...*\n")
+                    await asyncio.sleep(delay)
+                    assistant_content.clear()
+                    tool_calls.clear()
+                    text_buffers.clear()
+                    tool_input_buffers.clear()
+                    tool_block_map.clear()
+                    pending_text.clear()
+                    stream_usage = None
+                else:
+                    record_error("api")
                     raise
 
         # Record token usage and metrics (outside async with, using captured data)
@@ -229,7 +252,7 @@ async def run(
             from core.rate_limit import check_rate_limit
             from core.session import current_session_get
             _user_id = current_session_get("user_id") or "default"
-            allowed, reason = check_rate_limit(_user_id, "tool_call")
+            allowed, reason = check_rate_limit(_user_id, "tool_call", tool_name=call["name"])
             if not allowed:
                 ctx = await on_tool_start(call["name"], call["input"])
                 await on_tool_end(ctx, json.dumps({"error": reason}))
@@ -276,15 +299,27 @@ async def run(
 
             ctx = await on_tool_start(call["name"], call["input"])
             _tool_t0 = time.monotonic()
-            result = await execute_tool(call["name"], call["input"])
+            async with async_trace_span("tool.execute", tool_name=call["name"]) as _tool_span:
+                result = await execute_tool(call["name"], call["input"])
             _tool_dur = time.monotonic() - _tool_t0
             record_tool_call(call["name"], _tool_dur)
+
+            # Detect error results so Claude knows the tool failed
+            is_error = False
+            try:
+                parsed = json.loads(result)
+                if isinstance(parsed, dict) and parsed.get("error"):
+                    is_error = True
+            except (json.JSONDecodeError, TypeError):
+                pass
+
             audit_tool_call(
                 user_id=current_session_get("user_id") or "unknown",
                 tool_name=call["name"],
                 tool_input=call["input"],
-                success="error" not in result.lower()[:100],
+                success=not is_error,
                 duration=_tool_dur,
+                result_summary=result[:500],
             )
             await on_tool_end(ctx, result)
 
@@ -295,15 +330,6 @@ async def run(
                     {"tool_name": call["name"], "tool_input": call["input"], "result": result},
                     tool_name=call["name"],
                 )
-
-            # Detect error results and set is_error so Claude knows the tool failed
-            is_error = False
-            try:
-                parsed = json.loads(result)
-                if isinstance(parsed, dict) and "error" in parsed:
-                    is_error = True
-            except (json.JSONDecodeError, TypeError):
-                pass
 
             tool_result: dict[str, Any] = {
                 "type": "tool_result",

@@ -4,6 +4,9 @@
   import { send } from '../ws.js';
   import { currentConversation } from '../state.svelte.js';
   import ToolCall from './ToolCall.svelte';
+  import Chart from './renderers/Chart.svelte';
+  import Image from './renderers/Image.svelte';
+  import Table from './renderers/Table.svelte';
 
   let { msg } = $props();
 
@@ -87,6 +90,24 @@
       <div class="tool-calls-container">
         {#each msg.toolCalls as tc (tc.id)}
           <ToolCall {tc} />
+        {/each}
+      </div>
+
+      <div class="inline-media">
+        {#each msg.toolCalls as tc (tc.id)}
+          {#if tc.chart}
+            <Chart plotlyJson={tc.chart.plotlyJson} title={tc.chart.title} />
+          {/if}
+          {#if tc.images && tc.images.length > 0}
+            {#each tc.images as img}
+              <Image src={img.data} alt={img.name || 'output'} mime={img.mime} />
+            {/each}
+          {/if}
+          {#if tc.tables && tc.tables.length > 0}
+            {#each tc.tables as html}
+              <Table {html} />
+            {/each}
+          {/if}
         {/each}
       </div>
     {/if}
@@ -193,6 +214,17 @@
     border: 1px solid var(--border);
     border-radius: 6px;
     padding: 2px 8px;
+  }
+
+  .inline-media {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin: 8px 0;
+  }
+  .inline-media :global(img) {
+    max-width: 100%;
+    border-radius: 6px;
   }
 
   /* Prose is styled globally in global.css */

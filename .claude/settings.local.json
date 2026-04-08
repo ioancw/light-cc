@@ -40,7 +40,9 @@
       "Bash(gh repo:*)",
       "Bash(git:*)",
       "Bash(head:*)",
-      "Bash(wc -l /c/Users/ioanc/github/light_cc/**/*.py)"
+      "Bash(wc -l /c/Users/ioanc/github/light_cc/**/*.py)",
+      "Bash(xargs cat:*)",
+      "Bash(xargs wc:*)"
     ]
   }
 }
