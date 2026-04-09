@@ -11,6 +11,7 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
+from zoneinfo import ZoneInfo
 
 from croniter import croniter
 from sqlalchemy import select, update
@@ -73,20 +74,41 @@ async def _notify_user_schedule_result(
             pass
 
 
-def _compute_next_run(cron_expression: str, base: datetime | None = None) -> datetime:
-    """Compute the next fire time from a cron expression."""
-    base = base or datetime.now(timezone.utc)
-    return croniter(cron_expression, base).get_next(datetime)
+def _compute_next_run(
+    cron_expression: str,
+    base: datetime | None = None,
+    user_tz: str = "UTC",
+) -> datetime:
+    """Compute the next fire time from a cron expression.
+
+    Evaluates the cron in the user's timezone so that '0 9 * * *' means
+    9 AM local time, then converts the result back to UTC for storage.
+    """
+    tz = ZoneInfo(user_tz) if user_tz else timezone.utc
+    base_utc = base or datetime.now(timezone.utc)
+    # Convert base to user's local time so croniter evaluates in local time
+    base_local = base_utc.astimezone(tz)
+    next_local = croniter(cron_expression, base_local).get_next(datetime)
+    # Convert back to UTC for DB storage
+    return next_local.astimezone(timezone.utc)
 
 
 async def _execute_schedule(
     schedule_id: str, user_id: str, name: str, prompt: str, cron_expression: str,
+    user_timezone: str = "UTC",
     **_kwargs: Any,
 ) -> None:
     """Run a single scheduled agent task and record the result."""
     from core import agent
     from tools.registry import get_all_tool_schemas
     from core.permissions import is_blocked, is_risky
+
+    # Set session context so tools (sandbox, etc.) can resolve the user
+    from core.session import set_current_session, current_session_set, connection_set
+    session_id = f"sched-{schedule_id}"
+    set_current_session(session_id)
+    current_session_set("user_id", user_id)
+    connection_set(session_id, "user_id", user_id)
 
     db = await get_db()
     try:
@@ -175,10 +197,12 @@ async def _execute_schedule(
             on_permission_check=perm_check,
             max_turns=20,
         )
-        result_text = "".join(output_parts)[:10000]
+        full_text = "".join(output_parts)
+        result_text = full_text[:10000]  # truncated summary for schedule_runs table
         status = "completed"
         error = None
     except Exception as e:
+        full_text = None
         result_text = None
         status = "failed"
         error = str(e)
@@ -201,17 +225,17 @@ async def _execute_schedule(
         await db.flush()
         conv_id = conv.id
 
-        # Store the prompt as a user message and the result as assistant message
+        # Store full (untruncated) output as the conversation message
         db.add(DbMessage(
             conversation_id=conv_id,
             role="user",
             content=prompt,
         ))
-        if result_text:
+        if full_text:
             db.add(DbMessage(
                 conversation_id=conv_id,
                 role="assistant",
-                content=result_text,
+                content=full_text,
             ))
         elif error:
             db.add(DbMessage(
@@ -233,7 +257,7 @@ async def _execute_schedule(
         await db.execute(
             update(Schedule)
             .where(Schedule.id == schedule_id)
-            .values(last_run_at=now, next_run_at=_compute_next_run(cron_expression, now))
+            .values(last_run_at=now, next_run_at=_compute_next_run(cron_expression, now, user_timezone))
         )
         await db.commit()
     except Exception as e:
@@ -262,21 +286,26 @@ async def _scheduler_loop() -> None:
             due = result.scalars().all()
 
             for sched in due:
-                # Advance next_run_at immediately to prevent double-fire
-                sched.next_run_at = _compute_next_run(sched.cron_expression, now)
-                await db.commit()
-
                 logger.info(f"Firing scheduled task: {sched.name} (id={sched.id})")
 
-                from core.job_queue import enqueue
-                await enqueue(
-                    "run_scheduled_agent",
-                    schedule_id=sched.id,
-                    user_id=sched.user_id,
-                    name=sched.name,
-                    prompt=sched.prompt,
-                    cron_expression=sched.cron_expression,
-                )
+                try:
+                    from core.job_queue import enqueue
+                    await enqueue(
+                        "run_scheduled_agent",
+                        schedule_id=sched.id,
+                        user_id=sched.user_id,
+                        name=sched.name,
+                        prompt=sched.prompt,
+                        cron_expression=sched.cron_expression,
+                        user_timezone=sched.user_timezone or "UTC",
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to enqueue scheduled task '{sched.name}': {e}")
+                    continue
+
+                # Advance next_run_at only after successful enqueue
+                sched.next_run_at = _compute_next_run(sched.cron_expression, now, sched.user_timezone)
+                await db.commit()
 
             await db.close()
         except Exception as e:
@@ -298,7 +327,7 @@ async def start_scheduler() -> None:
         )
         result = await db.execute(stmt)
         for sched in result.scalars().all():
-            sched.next_run_at = _compute_next_run(sched.cron_expression)
+            sched.next_run_at = _compute_next_run(sched.cron_expression, user_tz=sched.user_timezone)
         await db.commit()
     finally:
         await db.close()

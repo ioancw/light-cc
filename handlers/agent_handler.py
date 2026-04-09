@@ -174,6 +174,33 @@ async def handle_user_message(
         parts = msg_stripped.split(None, 1)
         args = parts[1] if len(parts) > 1 else ""
 
+        # Built-in: /reload
+        if slash_name == "reload":
+            from skills.registry import reload_skills
+            from commands.registry import reload_commands
+            n_skills = reload_skills()
+            n_cmds = reload_commands()
+            # Clear cached project config/rules so they're re-read too
+            connection_set(session_id, "project_config", None)
+            connection_set(session_id, "project_rules", None)
+            await send_event("text_delta", {"text": f"Reloaded {n_skills} skills and {n_cmds} commands."})
+            # Notify frontend of updated skill list
+            refreshed = [
+                {"name": s.name, "description": s.description, "argument_hint": s.argument_hint}
+                for s in list_skills() if s.user_invocable
+            ] + [
+                {"name": c.name, "description": c.description, "argument_hint": c.argument_hint}
+                for c in list_commands()
+            ] + [
+                {"name": "context", "description": "Show context window usage breakdown", "argument_hint": ""},
+                {"name": "plugin", "description": "Install, list, update, or uninstall plugins", "argument_hint": "install|list|update|uninstall <name-or-url>"},
+                {"name": "schedule", "description": "Create, list, enable, disable, or delete scheduled agent tasks", "argument_hint": "create|list|enable|disable|delete|runs|run"},
+                {"name": "reload", "description": "Reload all skills, commands, and project config from disk", "argument_hint": ""},
+            ]
+            await send_event("skills_updated", {"skills": refreshed})
+            await send_event("turn_complete", {})
+            return
+
         # Built-in: /context
         if slash_name == "context":
             from core.context import get_context_breakdown

@@ -159,6 +159,7 @@ async def websocket_endpoint(
         {"name": "context", "description": "Show context window usage breakdown", "argument_hint": ""},
         {"name": "plugin", "description": "Install, list, update, or uninstall plugins", "argument_hint": "install|list|update|uninstall <name-or-url>"},
         {"name": "schedule", "description": "Create, list, enable, disable, or delete scheduled agent tasks", "argument_hint": "create|list|enable|disable|delete|runs|run"},
+        {"name": "reload", "description": "Reload all skills, commands, and project config from disk", "argument_hint": ""},
     ]
     await send_event("connected", {
         "session_id": session_id,

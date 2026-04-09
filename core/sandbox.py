@@ -52,7 +52,14 @@ class UserWorkspace:
             self.memory.resolve(),
         ]
 
-        # Read-only tools may also access the project root
+        # Writable project subdirectories (skills & commands are user-editable)
+        _writable_project_dirs = [
+            (_PROJECT_ROOT / "skills").resolve(),
+            (_PROJECT_ROOT / "commands").resolve(),
+        ]
+        allowed_roots.extend(_writable_project_dirs)
+
+        # Read-only tools may also access the full project root
         if read_only:
             allowed_roots.append(_PROJECT_ROOT.resolve())
 

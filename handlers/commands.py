@@ -215,12 +215,26 @@ async def handle_schedule_command(args: str, user_id: str) -> str:
         except ValueError:
             tokens = sub_args.split()
 
+        # Extract --tz flag if present
+        user_tz = "UTC"
+        filtered_tokens = []
+        i = 0
+        while i < len(tokens):
+            if tokens[i] == "--tz" and i + 1 < len(tokens):
+                user_tz = tokens[i + 1]
+                i += 2
+            else:
+                filtered_tokens.append(tokens[i])
+                i += 1
+        tokens = filtered_tokens
+
         if len(tokens) < 3:
             return (
-                "Usage: `/schedule create <name> <cron> <prompt>`\n\n"
+                "Usage: `/schedule create <name> <cron> <prompt> [--tz <timezone>]`\n\n"
                 "Examples:\n"
                 "- `/schedule create \"Morning Brief\" \"0 9 * * *\" Summarize overnight market moves`\n"
-                "- `/schedule create \"Hourly Check\" \"0 * * * *\" Check portfolio risk metrics`"
+                "- `/schedule create \"Hourly Check\" \"0 * * * *\" Check portfolio risk metrics --tz Europe/Bucharest`\n\n"
+                "Without `--tz`, cron times are interpreted as UTC."
             )
 
         name = tokens[0]
@@ -234,8 +248,15 @@ async def handle_schedule_command(args: str, user_id: str) -> str:
                 "Examples: `0 9 * * *` (daily 9am), `*/30 * * * *` (every 30 min), `0 9 * * 1` (Mondays 9am)"
             )
 
+        # Validate timezone
         try:
-            sched = await create_schedule(user_id, name, cron_expr, prompt)
+            from zoneinfo import ZoneInfo
+            ZoneInfo(user_tz)
+        except (KeyError, Exception):
+            return f"Invalid timezone: `{user_tz}`. Use IANA names like `Europe/Bucharest`, `US/Eastern`, `UTC`."
+
+        try:
+            sched = await create_schedule(user_id, name, cron_expr, prompt, user_tz)
         except Exception as e:
             return f"Failed to create schedule: {e}"
 
@@ -245,6 +266,7 @@ async def handle_schedule_command(args: str, user_id: str) -> str:
             f"- **ID:** `{sched.id[:8]}`\n"
             f"- **Name:** {sched.name}\n"
             f"- **Cron:** `{sched.cron_expression}`\n"
+            f"- **Timezone:** {sched.user_timezone}\n"
             f"- **Prompt:** {sched.prompt}\n"
             f"- **Next run:** {next_run}"
         )
@@ -256,11 +278,12 @@ async def handle_schedule_command(args: str, user_id: str) -> str:
         lines = ["**Scheduled tasks**\n"]
         for s in schedules:
             status = "enabled" if s.enabled else "disabled"
+            tz_label = s.user_timezone or "UTC"
             next_run = s.next_run_at.strftime("%Y-%m-%d %H:%M UTC") if s.next_run_at else "n/a"
             last_run = s.last_run_at.strftime("%Y-%m-%d %H:%M UTC") if s.last_run_at else "never"
             lines.append(
                 f"- `{s.id[:8]}` **{s.name}** ({status})\n"
-                f"  Cron: `{s.cron_expression}` | Next: {next_run} | Last: {last_run}\n"
+                f"  Cron: `{s.cron_expression}` ({tz_label}) | Next: {next_run} | Last: {last_run}\n"
                 f"  Prompt: {s.prompt[:100]}{'...' if len(s.prompt) > 100 else ''}"
             )
         return "\n".join(lines)
@@ -328,7 +351,7 @@ async def handle_schedule_command(args: str, user_id: str) -> str:
     else:
         return (
             "**Schedule commands**\n\n"
-            "- `/schedule create <name> <cron> <prompt>` -- create a scheduled task\n"
+            "- `/schedule create <name> <cron> <prompt> [--tz <timezone>]` -- create a scheduled task\n"
             "- `/schedule list` -- show all schedules (with IDs)\n"
             "- `/schedule enable <name|id>` -- enable a schedule\n"
             "- `/schedule disable <name|id>` -- disable a schedule\n"

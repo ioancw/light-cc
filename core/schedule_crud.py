@@ -14,6 +14,7 @@ from core.scheduler import _compute_next_run
 
 async def create_schedule(
     user_id: str, name: str, cron_expression: str, prompt: str,
+    user_timezone: str = "UTC",
 ) -> Schedule:
     """Create a new schedule. Raises ValueError for invalid cron or duplicate name."""
     if not croniter.is_valid(cron_expression):
@@ -32,8 +33,9 @@ async def create_schedule(
             name=name,
             cron_expression=cron_expression,
             prompt=prompt,
+            user_timezone=user_timezone,
             enabled=True,
-            next_run_at=_compute_next_run(cron_expression),
+            next_run_at=_compute_next_run(cron_expression, user_tz=user_timezone),
         )
         db.add(sched)
         await db.commit()
@@ -144,12 +146,16 @@ async def update_schedule(schedule_id: str, user_id: str, **kwargs) -> Schedule 
                 if not croniter.is_valid(value):
                     raise ValueError(f"Invalid cron expression: {value}")
                 sched.cron_expression = value
-                sched.next_run_at = _compute_next_run(value)
+                sched.next_run_at = _compute_next_run(value, user_tz=sched.user_timezone)
             elif hasattr(sched, key):
                 setattr(sched, key, value)
 
+        # Recompute next_run_at if timezone changed
+        if "user_timezone" in kwargs:
+            sched.next_run_at = _compute_next_run(sched.cron_expression, user_tz=sched.user_timezone)
+
         if "enabled" in kwargs and kwargs["enabled"] and not sched.next_run_at:
-            sched.next_run_at = _compute_next_run(sched.cron_expression)
+            sched.next_run_at = _compute_next_run(sched.cron_expression, user_tz=sched.user_timezone)
 
         await db.commit()
         await db.refresh(sched)

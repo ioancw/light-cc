@@ -228,7 +228,7 @@
 <aside class="sidebar" class:collapsed={appState.sidebarCollapsed}>
   <div class="sidebar-header">
     <div class="logo-mark">
-      <svg width="10" height="12" viewBox="0 0 10 12" fill="none"><path d="M6 0L0 7h4l-1 5 6-7H5l1-5z" fill="#fff"/></svg>
+      <svg width="12" height="12" viewBox="0 0 32 32" fill="none"><g transform="translate(16,16) scale(1.3) translate(-16,-16)"><path d="M24 4c-3 2-6 5-8 9s-3 8-3.5 11c-.1.8-.2 1.5-.2 2l-.3.5c-.5-.5-1.2-1.5-1.5-3-.4-1.8-.2-4 1-6.5 1.5-3 3-5.5 5-7.5s4-3.5 6-4.5c.5-.2.9-.4 1.2-.5L24 4z" fill="#fff" opacity=".5"/><path d="M24 4c-2 1-4 2.5-6 4.5s-3.5 4.5-5 7.5c-1.2 2.5-1.4 4.7-1 6.5.3 1.5 1 2.5 1.5 3l.3-.5c0-.5.1-1.2.2-2 .5-3 1.5-7 3.5-11s5-7 8-9l.2-.1-.5.1c-.3.1-.7.3-1.2.5z" fill="#fff"/><line x1="12.5" y1="25.5" x2="8" y2="28" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/></g></svg>
     </div>
     <span class="logo-name">Light CC</span>
     <button class="sidebar-close-btn" onclick={toggleCollapse} title="Hide sidebar">&#9664;</button>

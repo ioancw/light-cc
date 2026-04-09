@@ -61,7 +61,10 @@ export function renderMarkdown(text) {
   });
 
   // Extract inline math: $...$ and \(...\)
-  processed = processed.replace(/\$([^\$\n]+?)\$/g, (_, tex) => {
+  // Tight delimiters: opening $ must not be followed by a space/newline,
+  // closing $ must not be preceded by a space. This prevents pairing two
+  // unrelated currency values like "$100 ... $115" as one math block.
+  processed = processed.replace(/(?<!\w)\$(?! )(\S[^\$\n]*?\S|\S)\$(?!\w)/g, (_, tex) => {
     const id = `MATHI${mathBlocks.length}MATHEND`;
     mathBlocks.push({ tex: tex.trim(), display: false });
     return id;

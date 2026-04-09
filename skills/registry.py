@@ -23,12 +23,35 @@ def unregister_skill(name: str) -> None:
     _SKILLS.pop(name, None)
 
 
+_skills_dirs: list[Path] = []
+
+
 def load_skills(skills_dir: str | Path) -> None:
     """Discover and register skills from a directory. Accumulates across calls."""
+    resolved = Path(skills_dir)
+    if resolved not in _skills_dirs:
+        _skills_dirs.append(resolved)
     skills = discover_skills(skills_dir)
     for s in skills:
         _SKILLS[s.name] = s
     logger.info(f"Loaded {len(_SKILLS)} skills: {list(_SKILLS.keys())}")
+
+
+def reload_skills() -> int:
+    """Re-read all skill files from previously loaded directories.
+
+    Returns the number of skills loaded.
+    """
+    # Preserve plugin-namespaced skills (loaded via plugin_loader, not from dirs)
+    plugin_skills = {k: v for k, v in _SKILLS.items() if ":" in k}
+    _SKILLS.clear()
+    _SKILLS.update(plugin_skills)
+    for d in _skills_dirs:
+        skills = discover_skills(d)
+        for s in skills:
+            _SKILLS[s.name] = s
+    logger.info(f"Reloaded {len(_SKILLS)} skills: {list(_SKILLS.keys())}")
+    return len(_SKILLS)
 
 
 def get_skill(name: str) -> SkillDef | None:

@@ -26,6 +26,7 @@ class CreateScheduleRequest(BaseModel):
     name: str
     cron_expression: str
     prompt: str
+    user_timezone: str = "UTC"
 
 
 class UpdateScheduleRequest(BaseModel):
@@ -33,6 +34,7 @@ class UpdateScheduleRequest(BaseModel):
     cron_expression: str | None = None
     prompt: str | None = None
     enabled: bool | None = None
+    user_timezone: str | None = None
 
 
 class ScheduleResponse(BaseModel):
@@ -40,6 +42,7 @@ class ScheduleResponse(BaseModel):
     name: str
     cron_expression: str
     prompt: str
+    user_timezone: str
     enabled: bool
     last_run_at: str | None
     next_run_at: str | None
@@ -61,6 +64,7 @@ def _to_response(sched) -> ScheduleResponse:
         name=sched.name,
         cron_expression=sched.cron_expression,
         prompt=sched.prompt,
+        user_timezone=sched.user_timezone or "UTC",
         enabled=sched.enabled,
         last_run_at=sched.last_run_at.isoformat() if sched.last_run_at else None,
         next_run_at=sched.next_run_at.isoformat() if sched.next_run_at else None,
@@ -90,7 +94,7 @@ async def api_list_schedules(user: User = Depends(get_current_user)):
 @router.post("", response_model=ScheduleResponse, status_code=201)
 async def api_create_schedule(req: CreateScheduleRequest, user: User = Depends(get_current_user)):
     try:
-        sched = await create_schedule(user.id, req.name, req.cron_expression, req.prompt)
+        sched = await create_schedule(user.id, req.name, req.cron_expression, req.prompt, req.user_timezone)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return _to_response(sched)

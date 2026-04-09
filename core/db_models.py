@@ -87,6 +87,7 @@ class Schedule(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     cron_expression: Mapped[str] = mapped_column(String(100), nullable=False)
     prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    user_timezone: Mapped[str] = mapped_column(String(50), default="UTC", server_default="UTC")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
