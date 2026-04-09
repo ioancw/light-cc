@@ -923,6 +923,8 @@ Background asyncio task, checks every 30s for due schedules (`enabled=True AND n
 
 **Session context**: `_execute_schedule` sets ContextVars (`set_current_session`, `current_session_set("user_id", ...)`, `connection_set`) before running the agent, so tools can resolve user workspace/sandbox paths correctly.
 
+**Result storage**: The full untruncated agent output is saved as the conversation message (so users see the complete result when clicking through from a notification). The `schedule_runs.result` column stores a 10k-character truncated summary for the runs history view.
+
 Scheduled agents: max 20 turns, no risky tools, 60s timeout. Results saved as conversations. Pushes `schedule_result` WS event.
 
 ### 9.2 Job Queue (`core/job_queue.py`)
