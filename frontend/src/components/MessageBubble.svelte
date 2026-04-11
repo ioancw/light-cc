@@ -1,6 +1,6 @@
 <script>
   import { renderMarkdown, highlightCode } from '../lib/markdown.js';
-  import { formatTime, escapeHtml } from '../lib/utils.js';
+  import { formatTime, escapeHtml, modelLabel } from '../lib/utils.js';
   import { send } from '../ws.js';
   import { currentConversation } from '../state.svelte.js';
   import ToolCall from './ToolCall.svelte';
@@ -72,6 +72,9 @@
       <span class="msg-role">
         {msg.role === 'user' ? 'You' : 'Light CC'}
       </span>
+      {#if msg.model && msg.role === 'assistant'}
+        <span class="msg-model">{modelLabel(msg.model)}</span>
+      {/if}
       {#if msg.timestamp}
         <span class="msg-time">{formatTime(msg.timestamp)}</span>
       {/if}
@@ -176,6 +179,13 @@
     font-size: 13px;
     font-weight: 600;
     letter-spacing: 0.01em;
+    font-family: var(--font-ui);
+  }
+
+  .msg-model {
+    font-size: 11px;
+    color: var(--accent-soft);
+    opacity: 0.7;
     font-family: var(--font-ui);
   }
 

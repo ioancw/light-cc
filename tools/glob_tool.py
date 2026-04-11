@@ -38,17 +38,23 @@ async def handle_glob(tool_input: dict[str, Any]) -> str:
 register_tool(
     name="Glob",
     aliases=["glob"],
-    description="Find files matching a glob pattern. Returns file paths sorted by modification time.",
+    description=(
+        "Find files matching a glob pattern. Returns file paths sorted by modification time "
+        "(most recent first). Use this instead of bash find/ls for file discovery. "
+        "Supports standard glob patterns: '**/*.py' (recursive), 'src/*.ts' (single dir), "
+        "'*.{js,ts}' (multiple extensions). Returns up to 200 results. "
+        "Use Grep instead if you need to search file contents, not just file names."
+    ),
     input_schema={
         "type": "object",
         "properties": {
             "pattern": {
                 "type": "string",
-                "description": "Glob pattern (e.g., '**/*.py', 'src/**/*.ts')",
+                "description": "Glob pattern (e.g. '**/*.py', 'src/**/*.ts', '*.{js,ts}')",
             },
             "path": {
                 "type": "string",
-                "description": "Directory to search in (default: current dir)",
+                "description": "Directory to search in. Defaults to project root.",
             },
         },
         "required": ["pattern"],

@@ -390,7 +390,10 @@ async def load_conversation(conversation_id: str) -> list[dict[str, Any]]:
             content = json.loads(content)
         except (json.JSONDecodeError, TypeError):
             pass
-        messages.append({"role": row.role, "content": content})
+        msg: dict[str, Any] = {"role": row.role, "content": content}
+        if row.created_at:
+            msg["timestamp"] = int(row.created_at.timestamp() * 1000)
+        messages.append(msg)
 
     return messages
 

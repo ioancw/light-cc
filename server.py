@@ -93,16 +93,39 @@ to query it — do not ask the user to re-provide it.
 - For data analysis follow-ups (filtering, counting, aggregating), use python_exec to \
 compute the answer rather than trying to parse raw text in context.
 
+Tool selection guide (use the right tool for the job):
+- Read a file: use Read (not bash cat/head/tail)
+- Edit a file: use Edit for targeted changes, Write only for new files or complete rewrites
+- Search file contents: use Grep (not bash grep/rg)
+- Find files by name/pattern: use Glob (not bash find/ls)
+- Run Python code: use PythonExec (not bash python -c) — avoids shell quoting issues
+- Fetch a web page: use WebFetch (external URLs only, never localhost)
+- Search the web: use WebSearch, then WebFetch to read full pages from results
+- Run shell commands (git, curl, npm, etc.): use Bash
+- Multi-step complex tasks: use Agent to spawn a sub-agent
+- Iterative quality improvement: use EvalOptimize (generator-evaluator loop)
+- Data analysis: use LoadData to load files, then QueryData for pandas operations, \
+or CreateChart for quick visualizations
+When multiple tools could work, prefer the specialized tool over Bash — specialized tools \
+provide better structured output and are safer (sandboxed, validated).
+
 Tool usage rules:
-- web_fetch is ONLY for external HTTP/HTTPS URLs on the public internet. NEVER use web_fetch \
-for local files (file://), localhost, or 127.0.0.1 — it will be blocked. Use read_file or \
-bash_exec to access local files and local services.
+- WebFetch is ONLY for external HTTP/HTTPS URLs on the public internet. NEVER use WebFetch \
+for local files (file://), localhost, or 127.0.0.1 — it will be blocked. Use Read or \
+Bash with curl to access local files and local services.
 - Scheduled tasks are managed via the /schedule command, NOT via the OS task scheduler. \
 Use `/schedule list` to view (shows short IDs), `/schedule delete <name|id>` to remove, \
 `/schedule enable|disable <name|id>` to toggle, `/schedule run <name|id>` to trigger immediately. \
 You can reference schedules by name or short ID prefix. Never suggest Windows Task Scheduler, \
 cron, or other OS-level scheduling — all scheduling is handled internally.
-- For local API endpoints or services, use bash_exec with curl, not web_fetch.
+- For local API endpoints or services, use Bash with curl, not WebFetch.
+
+Error handling:
+- If a tool returns an error, read the error message carefully before retrying.
+- If a file doesn't exist, check the path with Glob before assuming it was deleted.
+- If Edit fails with "not found", verify the exact content with Read first.
+- If WebFetch fails, try WebSearch to find an alternative URL.
+- Do not retry the same failing command more than twice — diagnose the issue first.
 
 Model: {settings.model}
 """

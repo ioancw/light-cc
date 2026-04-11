@@ -57,25 +57,36 @@ async def handle_edit(tool_input: dict[str, Any]) -> str:
 register_tool(
     name="Edit",
     aliases=["edit"],
-    description="Edit a file by replacing old_string with new_string.",
+    description=(
+        "Edit a file by replacing an exact string match with new text. "
+        "The old_string must appear exactly once in the file (including whitespace and indentation) "
+        "or the edit will fail — include enough surrounding context to make the match unique. "
+        "To replace all occurrences, set replace_all=true. "
+        "Prefer this over Write for modifications — it only changes what you specify. "
+        "Use Write only for creating new files or complete rewrites."
+    ),
     input_schema={
         "type": "object",
         "properties": {
             "file_path": {
                 "type": "string",
-                "description": "Absolute path to the file",
+                "description": "Absolute path to the file to edit",
             },
             "old_string": {
                 "type": "string",
-                "description": "The exact text to find and replace",
+                "description": (
+                    "The exact text to find and replace. Must match the file content exactly, "
+                    "including indentation (spaces/tabs). Include enough surrounding context "
+                    "to make the match unique."
+                ),
             },
             "new_string": {
                 "type": "string",
-                "description": "The replacement text",
+                "description": "The replacement text. Must differ from old_string.",
             },
             "replace_all": {
                 "type": "boolean",
-                "description": "Replace all occurrences (default false)",
+                "description": "Replace all occurrences instead of requiring a unique match (default false)",
             },
         },
         "required": ["file_path", "old_string", "new_string"],

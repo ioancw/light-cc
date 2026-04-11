@@ -71,6 +71,13 @@ async def run(
     except Exception as e:
         logger.debug(f"Request metric recording failed: {e}")
 
+    # Fields allowed in the Claude API messages payload
+    _API_MSG_KEYS = {"role", "content"}
+
+    def _clean_messages(msgs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Strip non-API fields (timestamp, model, etc.) before sending to Claude."""
+        return [{k: v for k, v in m.items() if k in _API_MSG_KEYS} for m in msgs]
+
     while remaining > 0:
         remaining -= 1
         _turn_start = time.monotonic()
@@ -100,7 +107,7 @@ async def run(
                     model=active_model,
                     max_tokens=settings.max_tokens,
                     system=system,
-                    messages=messages,
+                    messages=_clean_messages(messages),
                     tools=tools if tools else [],
                 ) as stream:
                     async for event in stream:

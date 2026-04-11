@@ -25,3 +25,36 @@ auth:
   registration_enabled: true
   jwt_expiry_hours: 1
   jwt_refresh_expiry_days: 7
+
+# Available models (used by model selector and routing)
+available_models:
+  - claude-sonnet-4-6
+  - claude-haiku-4-5-20251001
+  - claude-opus-4-6
+
+# Model routing: classify input and direct to different models for cost/latency.
+# Disabled by default. Rules are evaluated in order; first regex match wins.
+# No match falls back to the default model above (Sonnet).
+#
+# Tiers:  Haiku (light) -> Sonnet (default) -> Opus (heavy)
+routing_enabled: true
+routing_rules:
+  # --- Tier 1: Haiku -- greetings, simple questions, status checks ---
+  - pattern: "^(hello|hi|hey|thanks|thank you|good morning|good afternoon)\\b"
+    model: claude-haiku-4-5-20251001
+  - pattern: "^(what time|what date|what day)\\b"
+    model: claude-haiku-4-5-20251001
+  - pattern: "^(yes|no|ok|sure|got it|sounds good|perfect)\\b"
+    model: claude-haiku-4-5-20251001
+  # --- Tier 3: Opus -- complex multi-step work, architecture, deep analysis ---
+  - pattern: "(refactor|redesign|rearchitect|rewrite)\\b"
+    model: claude-opus-4-6
+  - pattern: "(review|audit|evaluate|assess)\\s+(the |this |my )?(code|codebase|architecture|system)"
+    model: claude-opus-4-6
+  - pattern: "(create|write|build|design)\\s+(a |an )?(plan|architecture|strategy|spec)"
+    model: claude-opus-4-6
+  - pattern: "(research|compare|investigate|deep.?dive)"
+    model: claude-opus-4-6
+  - pattern: "(implement|build|create)\\b.{0,40}(system|module|feature|service|api)\\b"
+    model: claude-opus-4-6
+  # --- Tier 2: Sonnet -- everything else (default, no rule needed) ---

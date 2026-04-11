@@ -95,11 +95,19 @@ async def handle_list_tasks(tool_input: dict[str, Any]) -> str:
 register_tool(
     name="TaskCreate",
     aliases=["create_task"],
-    description="Create a visible task in the UI task list. Use this to show progress on multi-step work.",
+    description=(
+        "Create a visible task in the UI task list to show progress on multi-step work. "
+        "Use this at the start of complex operations to give the user visibility into what you're doing. "
+        "Update each task with TaskUpdate as you complete steps. "
+        "Returns a task_id for use with TaskUpdate."
+    ),
     input_schema={
         "type": "object",
         "properties": {
-            "title": {"type": "string", "description": "Task title"},
+            "title": {
+                "type": "string",
+                "description": "Task title displayed in the UI (e.g. 'Analyzing dataset', 'Searching codebase')",
+            },
             "status": {
                 "type": "string",
                 "enum": ["pending", "running", "done", "failed"],
@@ -114,15 +122,21 @@ register_tool(
 register_tool(
     name="TaskUpdate",
     aliases=["update_task"],
-    description="Update a task's status in the UI task list.",
+    description=(
+        "Update a task's status in the UI task list. "
+        "Call with status 'done' when a task completes, or 'failed' if it errors."
+    ),
     input_schema={
         "type": "object",
         "properties": {
-            "task_id": {"type": "string", "description": "The task ID returned by create_task"},
+            "task_id": {
+                "type": "string",
+                "description": "The task ID returned by TaskCreate",
+            },
             "status": {
                 "type": "string",
                 "enum": ["pending", "running", "done", "failed"],
-                "description": "New status",
+                "description": "New status for the task",
             },
         },
         "required": ["task_id", "status"],
@@ -133,7 +147,7 @@ register_tool(
 register_tool(
     name="TaskList",
     aliases=["list_tasks"],
-    description="List all tasks and their current statuses.",
+    description="List all tasks and their current statuses. Use to check progress of previously created tasks.",
     input_schema={
         "type": "object",
         "properties": {},

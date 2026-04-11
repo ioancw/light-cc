@@ -56,13 +56,18 @@ async def handle_tool_search(tool_input: dict[str, Any]) -> str:
 register_tool(
     name="ToolSearch",
     aliases=["tool_search"],
-    description="Search available tools by keyword. Returns matching tool names, descriptions, and schemas.",
+    description=(
+        "Search available tools (both built-in and MCP) by keyword. "
+        "Returns matching tool names, descriptions, and input schemas. "
+        "Use when you're unsure which tool to use for a task, or to discover MCP tools "
+        "that may be available from connected servers."
+    ),
     input_schema={
         "type": "object",
         "properties": {
             "query": {
                 "type": "string",
-                "description": "Keywords to search for in tool names and descriptions",
+                "description": "Keywords to search for in tool names and descriptions (e.g. 'chart', 'file search')",
             },
             "max_results": {
                 "type": "integer",

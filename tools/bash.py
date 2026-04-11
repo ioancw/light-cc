@@ -67,6 +67,12 @@ async def handle_bash(tool_input: dict[str, Any]) -> str:
     if not command:
         return json.dumps({"error": "No command provided"})
 
+    # Validate command doesn't escape user workspace
+    from core.sandbox import validate_bash_command
+    err = validate_bash_command(command)
+    if err:
+        return json.dumps({"error": err})
+
     timeout = min(tool_input.get("timeout", TIMEOUT), 600)
     tmp_path: str | None = None
 
@@ -96,7 +102,16 @@ async def handle_bash(tool_input: dict[str, Any]) -> str:
 register_tool(
     name="Bash",
     aliases=["bash"],
-    description="Execute a shell command. Returns stdout, stderr, and exit code.",
+    description=(
+        "Execute a shell command via subprocess. Returns stdout, stderr, and exit code. "
+        "Use for: git commands, package management, running executables, directory listings, "
+        "curl for local APIs, system commands. "
+        "Do NOT use for: reading files (use Read), editing files (use Edit), "
+        "searching file contents (use Grep), finding files (use Glob), "
+        "running Python code (use PythonExec). "
+        "Commands run in the project directory with sandboxed permissions. "
+        "Timeout default is 120s, max 600s."
+    ),
     input_schema={
         "type": "object",
         "properties": {

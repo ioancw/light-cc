@@ -139,8 +139,11 @@ register_tool(
     aliases=["eval_optimize", "evaluator_optimizer"],
     description=(
         "Iteratively refine output using a generator-evaluator loop. "
-        "A generator subagent produces output, an evaluator scores it against criteria, "
-        "and the generator revises based on feedback until the criteria pass or max iterations are reached."
+        "Use when output quality matters and can be objectively evaluated — "
+        "e.g. writing code that must pass tests, drafting text that must meet style criteria. "
+        "A generator subagent produces output, an evaluator scores it against your criteria (0-10), "
+        "and the generator revises based on feedback until the score passes or max iterations are reached. "
+        "Not needed for simple one-shot tasks — use only when iterative refinement adds value."
     ),
     input_schema={
         "type": "object",

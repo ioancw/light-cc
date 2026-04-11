@@ -63,21 +63,28 @@ async def handle_grep(tool_input: dict[str, Any]) -> str:
 register_tool(
     name="Grep",
     aliases=["grep"],
-    description="Search for a regex pattern across files. Returns matching lines with file paths and line numbers.",
+    description=(
+        "Search for a regex pattern across files. Returns matching lines with file paths "
+        "and line numbers. Use this instead of bash grep/rg. "
+        "Supports full regex syntax (e.g. 'def\\s+my_func', 'TODO|FIXME'). "
+        "Filter by file type with the glob parameter (e.g. '*.py', '*.ts'). "
+        "Default searches current directory recursively, max 50 results. "
+        "Use Glob instead if you only need to find files by name, not search their contents."
+    ),
     input_schema={
         "type": "object",
         "properties": {
             "pattern": {
                 "type": "string",
-                "description": "Regex pattern to search for",
+                "description": "Regex pattern to search for (e.g. 'class MyModel', 'import.*pandas')",
             },
             "path": {
                 "type": "string",
-                "description": "Directory or file to search in (default: current dir)",
+                "description": "Directory or file to search in. Defaults to project root.",
             },
             "glob": {
                 "type": "string",
-                "description": "Glob pattern to filter files (default: **/*)",
+                "description": "Glob pattern to filter files (e.g. '*.py', 'src/**/*.ts')",
             },
             "ignore_case": {
                 "type": "boolean",
@@ -85,7 +92,7 @@ register_tool(
             },
             "max_results": {
                 "type": "integer",
-                "description": "Max results to return (default 50)",
+                "description": "Max results to return (default 50). Increase for broad searches.",
             },
         },
         "required": ["pattern"],

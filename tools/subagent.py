@@ -347,9 +347,14 @@ register_tool(
     name="Agent",
     aliases=["subagent", "BackgroundAgent", "background_agent"],
     description=(
-        "Spawn a sub-agent to handle a task independently. Supports typed agents "
-        "(explorer, planner, coder, researcher, default), background execution, "
-        "and continue/resume via agent_id."
+        "Spawn a sub-agent to handle a complex task independently in a separate context. "
+        "Use for: parallelizing independent work, isolating large tasks from the main conversation, "
+        "or delegating specialized work (research, code exploration, planning). "
+        "Typed agents have focused tool sets and system prompts: "
+        "explorer (file discovery), planner (architecture), coder (implementation), "
+        "researcher (web search + analysis), default (all tools). "
+        "Use run_in_background=true to continue working while the agent runs. "
+        "Resume a previous agent by passing its agent_id."
     ),
     input_schema={
         "type": "object",
@@ -384,7 +389,11 @@ register_tool(
 register_tool(
     name="AgentStatus",
     aliases=["CheckBackground", "check_background"],
-    description="Check the status of sub-agents. Call with no agent_id to list all, or with an agent_id to check a specific one.",
+    description=(
+        "Check the status of sub-agents. "
+        "Call with no agent_id to list all active/completed agents, "
+        "or with an agent_id to get the result of a specific agent."
+    ),
     input_schema={
         "type": "object",
         "properties": {

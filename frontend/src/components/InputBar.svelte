@@ -202,12 +202,20 @@
     autoResize();
   }
 
+  // Listen for suggestion chip clicks from ChatArea
+  function onSuggestion(e) {
+    text = e.detail.prompt;
+    sendMessage();
+  }
+
   onMount(() => {
     window.addEventListener('lcc-insert-text', onInsertText);
+    window.addEventListener('lcc-suggestion', onSuggestion);
   });
 
   onDestroy(() => {
     window.removeEventListener('lcc-insert-text', onInsertText);
+    window.removeEventListener('lcc-suggestion', onSuggestion);
   });
 </script>
 

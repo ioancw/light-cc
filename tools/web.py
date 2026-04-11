@@ -133,11 +133,21 @@ async def handle_web_search(tool_input: dict[str, Any]) -> str:
 register_tool(
     name="WebFetch",
     aliases=["web_fetch"],
-    description="Fetch content from a URL. Supports GET and POST. Returns status code and body.",
+    description=(
+        "Fetch content from a public HTTP/HTTPS URL. Returns status code and body text. "
+        "IMPORTANT: Only for external URLs on the public internet. "
+        "Do NOT use for local files (use Read), localhost/127.0.0.1 (use Bash with curl), "
+        "or file:// URLs (use Read). Private/internal addresses are blocked (SSRF protection). "
+        "For web pages, returns extracted text. For APIs, returns raw JSON. "
+        "Supports GET and POST methods. Timeout is 30 seconds."
+    ),
     input_schema={
         "type": "object",
         "properties": {
-            "url": {"type": "string", "description": "The URL to fetch"},
+            "url": {
+                "type": "string",
+                "description": "The full URL to fetch (must be https:// or http://). Not for localhost or file:// paths.",
+            },
             "method": {
                 "type": "string",
                 "enum": ["GET", "POST"],
@@ -145,7 +155,7 @@ register_tool(
             },
             "headers": {
                 "type": "object",
-                "description": "Optional HTTP headers",
+                "description": "Optional HTTP headers as key-value pairs",
             },
             "body": {
                 "type": "object",
@@ -160,14 +170,22 @@ register_tool(
 register_tool(
     name="WebSearch",
     aliases=["web_search"],
-    description="Search the web using DuckDuckGo. Returns titles, URLs, and snippets.",
+    description=(
+        "Search the web using DuckDuckGo. Returns titles, URLs, and text snippets. "
+        "Use this to find current information, documentation, or answers to factual questions. "
+        "Follow up with WebFetch to read full pages from the results. "
+        "Default returns 5 results."
+    ),
     input_schema={
         "type": "object",
         "properties": {
-            "query": {"type": "string", "description": "Search query"},
+            "query": {
+                "type": "string",
+                "description": "Search query (e.g. 'python pandas groupby tutorial')",
+            },
             "max_results": {
                 "type": "integer",
-                "description": "Max results to return (default: 5)",
+                "description": "Max results to return (default 5). Increase for broader searches.",
             },
         },
         "required": ["query"],

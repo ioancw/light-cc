@@ -15,11 +15,8 @@ export function connect() {
   appState.connected = false;
 
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const tokenParam = appState.authToken
-    ? `?token=${encodeURIComponent(appState.authToken)}`
-    : '';
 
-  ws = new WebSocket(`${protocol}//${location.host}/ws${tokenParam}`);
+  ws = new WebSocket(`${protocol}//${location.host}/ws`);
 
   ws.onopen = () => {
     appState.connected = true;
@@ -28,6 +25,10 @@ export function connect() {
     if (reconnectTimer) {
       clearTimeout(reconnectTimer);
       reconnectTimer = null;
+    }
+    // Send auth token as first message (preferred over query param)
+    if (appState.authToken) {
+      ws.send(JSON.stringify({ type: 'auth', data: { token: appState.authToken } }));
     }
   };
 
@@ -98,6 +99,7 @@ function handleEvent(type, data, cid = null) {
       appState.sessionId = data.session_id;
       if (data.user) appState.user = data.user;
       appState.skills = data.skills || [];
+      appState.suggestions = data.suggestions || [];
       if (data.available_models) {
         appState.availableModels = data.available_models;
         appState.currentModel = data.model || data.available_models[0] || '';
@@ -137,6 +139,7 @@ function handleEvent(type, data, cid = null) {
             chart: tc.chart || null,
           })),
           timestamp: m.timestamp || null,
+          model: m.model || null,
           streaming: false,
         }));
       }
@@ -265,7 +268,10 @@ function handleEvent(type, data, cid = null) {
       break;
 
     case 'turn_complete':
-      if (msg) msg.streaming = false;
+      if (msg) {
+        msg.streaming = false;
+        if (data.model) msg.model = data.model;
+      }
       appState.inlineStatus = null;
       if (data.conversation_id && conv) {
         conv.serverId = data.conversation_id;

@@ -53,11 +53,14 @@ async def count_message_tokens(
 ) -> int:
     """Count tokens using the Anthropic SDK, with fallback to estimation."""
     client = get_client()
+    # Strip non-API fields (timestamp, model, etc.) before sending to the API
+    _api_keys = {"role", "content"}
+    clean = [{k: v for k, v in m.items() if k in _api_keys} for m in messages]
     try:
         result = await client.messages.count_tokens(
             model=settings.model,
             system=system,
-            messages=messages,
+            messages=clean,
             tools=tools or [],
         )
         return result.input_tokens

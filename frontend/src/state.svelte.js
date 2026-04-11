@@ -26,6 +26,9 @@ export const appState = $state({
   // Skills (for slash command autocomplete)
   skills: [],
 
+  // Suggestion chips for new-chat empty state
+  suggestions: [],
+
   // Permission requests keyed by conversation id (supports concurrent agents)
   pendingPermissions: {},
 

@@ -5,6 +5,10 @@
   let messagesEl = $state(null);
   let autoScroll = $state(true);
 
+  function useSuggestion(prompt) {
+    window.dispatchEvent(new CustomEvent('lcc-suggestion', { detail: { prompt } }));
+  }
+
   // Track message count to trigger auto-scroll
   let messageCount = $derived(currentConversation()?.messages?.length || 0);
   let lastStreamContent = $derived.by(() => {
@@ -53,9 +57,19 @@
       </div>
       <h2>Start a conversation</h2>
       <p>An AI assistant with tools for code execution, data analysis, and visualization.</p>
-      <button class="empty-cta" onclick={() => document.querySelector('.input-textarea')?.focus()}>
-        Type a message to begin
-      </button>
+      {#if appState.suggestions.length > 0}
+        <div class="suggestions">
+          {#each appState.suggestions as s}
+            <button class="suggestion-chip" onclick={() => useSuggestion(s.prompt)}>
+              {s.label}
+            </button>
+          {/each}
+        </div>
+      {:else}
+        <button class="empty-cta" onclick={() => document.querySelector('.input-textarea')?.focus()}>
+          Type a message to begin
+        </button>
+      {/if}
     </div>
   {:else}
     {#each currentConversation().messages as msg (msg.id)}
@@ -125,6 +139,33 @@
   }
   .empty-cta:hover {
     background: var(--border);
+    color: var(--fg-bright);
+  }
+
+  .suggestions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    justify-content: center;
+    max-width: 480px;
+    margin-top: 4px;
+  }
+
+  .suggestion-chip {
+    background: var(--surface2);
+    border: 1px solid var(--border2);
+    border-radius: 20px;
+    color: var(--fg-dim);
+    padding: 8px 18px;
+    font-family: var(--font-ui);
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+    white-space: nowrap;
+  }
+  .suggestion-chip:hover {
+    background: var(--border);
+    border-color: var(--accent-soft);
     color: var(--fg-bright);
   }
 

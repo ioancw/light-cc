@@ -38,17 +38,21 @@ async def handle_write(tool_input: dict[str, Any]) -> str:
 register_tool(
     name="Write",
     aliases=["write"],
-    description="Write content to a file. Creates parent directories if needed.",
+    description=(
+        "Write content to a file, creating it and parent directories if they don't exist. "
+        "WARNING: This overwrites the entire file. For partial modifications, use Edit instead. "
+        "Use this for: creating new files, or complete rewrites where Edit would be impractical."
+    ),
     input_schema={
         "type": "object",
         "properties": {
             "file_path": {
                 "type": "string",
-                "description": "Absolute path to the file to write",
+                "description": "Absolute path to the file to create or overwrite",
             },
             "content": {
                 "type": "string",
-                "description": "The content to write",
+                "description": "The full content to write to the file. This replaces the entire file.",
             },
         },
         "required": ["file_path", "content"],

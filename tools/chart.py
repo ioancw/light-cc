@@ -319,11 +319,13 @@ register_tool(
     name="CreateChart",
     aliases=["create_chart"],
     description=(
-        "Create an interactive chart displayed inline in the chat. "
-        "Accepts a named dataset (via load_data) or raw arrays. "
+        "Create an interactive Plotly chart displayed inline in the chat. "
+        "Use for quick visualizations without writing Python code. "
+        "Accepts a named dataset (loaded via LoadData) or raw arrays (x_values/y_values/labels/values). "
         "Types: bar, line, scatter, histogram, box, area, pie, heatmap, "
         "violin, treemap, sunburst, funnel, waterfall, radar, sankey, "
-        "candlestick, gauge."
+        "candlestick, gauge. "
+        "For complex or highly customized charts, use PythonExec with plotly or matplotlib instead."
     ),
     input_schema={
         "type": "object",

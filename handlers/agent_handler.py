@@ -407,8 +407,13 @@ async def handle_user_message(
 
         return True if allowed else "User denied this action"
 
-    # Get per-session model override
+    # Model selection: per-session override > skill override > routing > config default
     active_model = conv_session_get(cid, "active_model") or None
+    if not active_model and matched_skill and getattr(matched_skill, "model", None):
+        active_model = matched_skill.model
+    if not active_model:
+        from core.router import select_model
+        active_model = select_model(data["text"])
 
     try:
         async with async_trace_span("agent.handle_message", user_id=user_id, cid=cid):
@@ -438,12 +443,16 @@ async def handle_user_message(
             "conversation_id": conv_id,
             "usage": usage_data,
             "context_tokens": context_tokens,
+            "model": active_model,
         })
     except asyncio.CancelledError:
         logger.info("Agent generation cancelled by user")
+        conv_session_set(cid, "messages", messages)
         await save_conversation(cid)
         await send_event("generation_cancelled", {})
     except Exception as e:
         logger.error(f"Agent error: {e}", exc_info=True)
         record_error("agent")
+        conv_session_set(cid, "messages", messages)
+        await save_conversation(cid)
         await send_event("error", {"message": str(e)})

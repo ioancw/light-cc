@@ -76,22 +76,25 @@ register_tool(
     name="PythonExec",
     aliases=["python_exec"],
     description=(
-        "Execute a Python script. Preferred over bash for Python code — "
-        "avoids shell quoting issues on Windows. The script runs as a .py file. "
-        "Print output file paths to stdout for auto-rendering of images. "
-        "The env var OUTPUT_DIR points to a guaranteed-writable directory for saving files — "
-        "use `import os; out = os.environ['OUTPUT_DIR']` to get the path."
+        "Execute a Python script as a .py file. Preferred over Bash for all Python code — "
+        "avoids shell quoting issues on Windows. "
+        "Use for: data analysis, computations, file processing, custom visualizations, "
+        "any task that needs Python libraries. "
+        "The env var OUTPUT_DIR points to a writable directory for saving output files — "
+        "use `import os; out = os.environ['OUTPUT_DIR']` to get the path. "
+        "Print output file paths to stdout for auto-rendering of images and charts in the UI. "
+        "For charts: save as *.plotly.json for interactive rendering, *.png for static."
     ),
     input_schema={
         "type": "object",
         "properties": {
             "script": {
                 "type": "string",
-                "description": "The Python script to execute",
+                "description": "The Python script to execute. Can be multi-line. All standard libraries and installed packages are available.",
             },
             "timeout": {
                 "type": "integer",
-                "description": "Timeout in seconds (max 600, default 120)",
+                "description": "Timeout in seconds (max 600, default 120). Increase for long-running computations.",
             },
         },
         "required": ["script"],

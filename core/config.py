@@ -79,6 +79,32 @@ class Settings(BaseModel):
     paths: PathsConfig = Field(default_factory=PathsConfig)
     server: ServerConfig = Field(default_factory=ServerConfig)
     auth: AuthConfig = Field(default_factory=AuthConfig)
+    # Suggestion chips shown on the new-chat empty state.
+    # Each entry: {"label": "display text", "prompt": "actual message sent"}
+    # If prompt starts with "/" it invokes the matching skill/command.
+    # Model routing: classify input and direct to different models for cost/latency optimization.
+    # Disabled by default. Each rule: {"pattern": "regex on user message", "model": "model-id"}
+    # First match wins. No match = default model.
+    routing_enabled: bool = False
+    routing_rules: list[dict[str, str]] = Field(default_factory=lambda: [
+        # Tier 1: Haiku -- greetings, simple questions, acknowledgements
+        {"pattern": r"^(hello|hi|hey|thanks|thank you|good morning|good afternoon)\b", "model": "claude-haiku-4-5-20251001"},
+        {"pattern": r"^(what time|what date|what day)\b", "model": "claude-haiku-4-5-20251001"},
+        {"pattern": r"^(yes|no|ok|sure|got it|sounds good|perfect)\b", "model": "claude-haiku-4-5-20251001"},
+        # Tier 3: Opus -- complex multi-step work, architecture, deep analysis
+        {"pattern": r"(refactor|redesign|rearchitect|rewrite)\b", "model": "claude-opus-4-6"},
+        {"pattern": r"(review|audit|evaluate|assess)\s+(the |this |my )?(code|codebase|architecture|system)", "model": "claude-opus-4-6"},
+        {"pattern": r"(create|write|build|design)\s+(a |an )?(plan|architecture|strategy|spec)", "model": "claude-opus-4-6"},
+        {"pattern": r"(research|compare|investigate|deep.?dive)", "model": "claude-opus-4-6"},
+        {"pattern": r"(implement|build|create)\b.{0,40}(system|module|feature|service|api)\b", "model": "claude-opus-4-6"},
+        # Tier 2: Sonnet -- everything else (default, no rule needed)
+    ])
+    suggestions: list[dict[str, str]] = Field(default_factory=lambda: [
+        {"label": "Top business stories", "prompt": "/morning-briefing"},
+        {"label": "Summarize a research paper", "prompt": "/analyze Upload or paste a research paper URL to summarize"},
+        {"label": "Analyze a dataset", "prompt": "/analyze Upload a CSV to explore"},
+        {"label": "What can you do?", "prompt": "What tools and skills do you have available? Give me a summary of your capabilities."},
+    ])
 
     @model_validator(mode="after")
     def _check_jwt_secret(self) -> "Settings":

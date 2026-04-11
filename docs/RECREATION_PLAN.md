@@ -136,8 +136,9 @@ light_cc/
 │   ├── rate_limit.py           # Token bucket + Redis sliding window
 │   ├── redis_store.py          # Redis helpers
 │   ├── rules.py                # .claude/rules/*.md
-│   ├── sandbox.py              # Per-user workspace paths
+│   ├── sandbox.py              # Per-user workspace paths + role-based write perms
 │   ├── sandbox_exec.py         # Sanitized subprocess execution
+│   ├── user_context.py         # current_user_id() helper for shared code
 │   ├── schedule_crud.py        # Schedule DB CRUD
 │   ├── scheduler.py            # Cron scheduler loop
 │   ├── search.py               # Full-text conversation search
@@ -360,9 +361,17 @@ class Settings(BaseModel):
     paths: PathsConfig = PathsConfig()
     server: ServerConfig = ServerConfig()
     auth: AuthConfig = AuthConfig()
+    suggestions: list[dict[str, str]] = [
+        {"label": "Top business stories", "prompt": "/morning-briefing"},
+        {"label": "Summarize a research paper", "prompt": "/analyze ..."},
+        {"label": "Analyze a dataset", "prompt": "/analyze Upload a CSV"},
+        {"label": "What can you do?", "prompt": "What tools and skills do you have?"},
+    ]
 ```
 
 Loaded from `config.yaml` + env vars. Validates `jwt_secret != "change-me-in-production"` when `ENV` is production.
+
+`suggestions` controls the clickable chips on the new-chat empty state. Each entry is `{label, prompt}`. Prompts starting with `/` invoke the matching skill/command.
 
 ---
 
@@ -431,15 +440,52 @@ Helpers: `save_session_state`, `load_session_state`, `save_conv_session`, `load_
 
 ### 2.6 Sandbox (`core/sandbox.py` + `core/sandbox_exec.py`)
 
+**Design principle**: Light CC is a shared multi-user platform, not an open dev environment. Users consume the shared Python codebase through skills and tools but cannot modify it. Only admins can edit shared project areas.
+
 Per-user workspace: `data/users/{user_id}/{workspace,outputs,uploads,memory}/`
 
-Path validation (`UserWorkspace.validate_path`):
-- Write-allowed roots: user workspace, outputs, uploads, memory dirs, **plus** project-level `skills/` and `commands/` dirs (so agents can create/edit skills and commands)
-- Read-only tools (Glob, Grep, Read) additionally allow the full project root
+#### Role-based path validation (`UserWorkspace.validate_path`)
+
+| Action | Regular user | Admin |
+|--------|-------------|-------|
+| Read project root (source, skills, etc.) | Yes | Yes |
+| Write to own workspace/outputs/uploads/memory | Yes | Yes |
+| Write to `skills/`, `commands/`, `.cortex/` | No | Yes |
+| Write to project root (Python code, config) | No | No |
+
+- `is_admin` is loaded from the User DB record on WebSocket connect and stored in the session via `connection_set(session_id, "is_admin", ...)`
 - Null bytes rejected; paths resolved before checking
 - No-user / "default" sessions bypass validation (legacy compatibility)
 
-Subprocess execution:
+#### Bash command lockdown (`validate_bash_command`)
+
+The Bash tool validates commands before execution to prevent workspace escapes:
+- Blocked patterns: `cd /`, `cd ..`, redirects to absolute paths (`> /path`), `cp`/`mv` to absolute paths, `ln`, `mount`, `chroot`
+- Admin users bypass these checks
+- `cwd` is always set to the user's workspace directory (non-overridable)
+
+#### User context for shared code (`core/user_context.py`)
+
+Shared Python code (skills, library functions) must scope DB queries to the active user. Helpers:
+
+```python
+from core.user_context import current_user_id, current_user_id_or_none, is_admin
+
+# Raises PermissionError if no user session -- use for mandatory scoping
+uid = current_user_id()
+db.execute("SELECT * FROM portfolios WHERE user_id = :uid", {"uid": uid})
+
+# Returns None if no user session -- use for optional scoping
+uid = current_user_id_or_none()
+
+# Check admin status
+if is_admin():
+    # allow broader access
+```
+
+These read from the session ContextVar, which is set automatically for both interactive and scheduled task contexts.
+
+#### Subprocess execution
 - ENV whitelist: `PATH, PYTHONPATH, HOME, USERPROFILE, SYSTEMROOT, COMSPEC, TEMP, TMP, LANG, LC_ALL, TERM, MPLBACKEND, OUTPUT_DIR`
 - ENV blocklist: `ANTHROPIC_API_KEY, OPENAI_API_KEY, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN, GITHUB_TOKEN, GH_TOKEN, DATABASE_URL, JWT_SECRET, SECRET_KEY`
 - Always injects: `MPLBACKEND=Agg`
@@ -604,7 +650,7 @@ The `cid` is client-chosen, identifies a conversation sub-session. Max 3 concurr
 
 | type | data fields |
 |------|------------|
-| `connected` | `{session_id, model, available_models, skills, user}` |
+| `connected` | `{session_id, model, available_models, skills, suggestions, user}` |
 | `error` | `{message}` |
 | `text_delta` | `{text}` |
 | `tool_start` | `{tool_id, name, input}` |
@@ -816,7 +862,7 @@ Sidebar collapses to `width: 0`. On mobile (<768px): fixed overlay, slides in.
 
 **Sidebar.svelte**: Logo (20px indigo square with bolt), new chat button, search input, time-grouped conversation list. Items 13px, 8px padding, 6px radius. Active = bold + accent dot. Double-click to rename. Delete with confirmation. Footer with keyboard shortcut hints.
 
-**ChatArea.svelte**: Message list with auto-scroll (threshold 80px from bottom). Empty state: centered logo + "How can I help?" message.
+**ChatArea.svelte**: Message list with auto-scroll (threshold 80px from bottom). Empty state: centered logo + "Start a conversation" heading + suggestion chips. Suggestion chips are configurable pill buttons (`settings.suggestions` list of `{label, prompt}` objects, sent in the `connected` WS event). Clicking a chip dispatches a `lcc-suggestion` custom event which InputBar listens for and sends as a message. Prompts starting with `/` invoke the matching skill. Chips render as `border-radius: 20px`, `font-size: 13px`, flex-wrapped, max-width 480px. Falls back to "Type a message to begin" button if no suggestions configured.
 
 **InputBar.svelte**: Textarea (15px, auto-resize, max 200px height) in rounded container (12px radius). Autocomplete dropdown for `/` commands. Send button (30px circle, inverted colors). Stop button (red). Attach button. Streaming dot indicator.
 
@@ -1249,6 +1295,98 @@ decorator: var(--accent-soft)
 27. **Frontend renderers**: Chart, Image, Table, HtmlEmbed
 28. **Frontend panels**: FilePanel, PermissionDialog
 29. **Polish**: autocomplete, keyboard shortcuts, responsive
+30. **First-class agents**: agent definitions, agent API, persistent sessions (Phase 12)
+
+---
+
+## Phase 12: First-Class Agents (Future)
+
+Elevate agents from implicit (skill + agent loop, gone when turn ends) to named, persistent, independently invocable entities. Modelled on the emerging industry consensus (NIST AI Agent Standards Initiative, Anthropic's Managed Agents pattern) but self-hosted.
+
+### 12.1 Agent Definitions
+
+YAML files or DB records defining a reusable agent:
+
+```yaml
+name: market-analyst
+description: "Analyzes market data and produces reports"
+model: claude-sonnet-4-6
+system_prompt: |
+  You are a market analyst with access to the shared
+  research codebase. Always scope queries to the current user.
+tools: [WebFetch, PythonExec, ReadFile, WriteFile]
+max_turns: 50
+timeout: 3600
+memory:
+  enabled: true          # persistent memory across sessions
+  scope: agent           # agent-level (shared) or user (per-user)
+permissions:
+  network: true
+  file_write: workspace_only
+triggers:
+  - cron: "0 9 * * 1-5"
+  - webhook: true        # enables POST /api/agents/{name}/run
+  - skill: true          # invocable as /market-analyst in chat
+```
+
+### 12.2 Agent Properties (Industry Consensus)
+
+| Property | Implementation |
+|----------|---------------|
+| Goal-directed autonomy | System prompt defines objective; agent loop plans and executes |
+| Tool use | Allowlisted tools per agent definition |
+| Memory/persistence | Agent-scoped memory (shared across sessions) + user-scoped memory |
+| Self-correction | Multi-turn agent loop with error detection and retry |
+
+### 12.3 Agent REST API
+
+```
+POST   /api/agents                    -- create agent definition
+GET    /api/agents                    -- list agents
+GET    /api/agents/{name}             -- get agent definition
+PATCH  /api/agents/{name}             -- update agent
+DELETE /api/agents/{name}             -- delete agent
+POST   /api/agents/{name}/run         -- trigger a run (async, returns session ID)
+       Body: { "prompt": "...", "user_id": "...", "webhook_url": "..." }
+GET    /api/agents/{name}/sessions    -- list sessions/runs
+GET    /api/agents/{name}/sessions/{id} -- get session result + messages
+POST   /api/agents/{name}/sessions/{id}/resume -- resume a paused/disconnected session
+DELETE /api/agents/{name}/sessions/{id} -- cancel a running session
+```
+
+### 12.4 Agent Sessions
+
+Long-running, resumable agent sessions with state persisted to DB:
+- Session state: `pending`, `running`, `paused`, `completed`, `failed`, `cancelled`
+- Messages, tool calls, and memory checkpointed periodically (not just at turn end)
+- Survives disconnects -- agent continues running, user reconnects to see progress
+- Result stored as a conversation (viewable/continuable in chat UI)
+
+### 12.5 Three Invocation Paths
+
+| Path | How it works |
+|------|-------------|
+| **Chat** | User types `/market-analyst analyse AAPL` -- resolved as a skill, runs in the WebSocket session |
+| **API** | External system calls `POST /api/agents/market-analyst/run` -- runs async via job queue, returns session ID for polling |
+| **Schedule** | Cron trigger fires at configured time -- uses existing scheduler infrastructure |
+
+### 12.6 Building Blocks Already in Place
+
+- `core/agent.py` -- agentic tool-use loop (multi-turn, streaming)
+- `tools/subagent.py` -- child agent spawning
+- Skills with YAML frontmatter -- close to agent definitions (system prompt, tool filter, description)
+- `core/scheduler.py` -- cron triggers with timezone support
+- `core/job_queue.py` -- async execution (arq/Redis or asyncio)
+- `core/sandbox.py` -- role-based scoped execution
+- `core/user_context.py` -- user scoping for shared code
+
+### 12.7 New Components Needed
+
+- `core/agent_registry.py` -- CRUD for agent definitions (DB-backed + YAML loader)
+- `core/agent_session.py` -- session lifecycle, checkpointing, resumption
+- `routes/agents.py` -- REST API endpoints
+- `alembic/versions/..._add_agents.py` -- `agent_definitions` and `agent_sessions` tables
+- Frontend: agent management panel (list, create, view runs)
 
 ---
 

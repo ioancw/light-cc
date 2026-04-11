@@ -284,12 +284,24 @@ async def handle_export_data(tool_input: dict[str, Any]) -> str:
 register_tool(
     name="LoadData",
     aliases=["load_data"],
-    description="Load a CSV, Excel, or JSON file into a named dataset for analysis.",
+    description=(
+        "Load a CSV, Excel (.xls/.xlsx), or JSON file into a named in-memory dataset for analysis. "
+        "Returns a preview (first 10 rows) and summary statistics. "
+        "After loading, use QueryData to run pandas operations on it, or CreateChart to visualize it. "
+        "The dataset persists in the session — load once, query many times. "
+        "For complex loading (custom delimiters, encodings), use PythonExec instead."
+    ),
     input_schema={
         "type": "object",
         "properties": {
-            "file_path": {"type": "string", "description": "Path to the data file"},
-            "name": {"type": "string", "description": "Name for the dataset (defaults to filename)"},
+            "file_path": {
+                "type": "string",
+                "description": "Absolute path to the data file (CSV, Excel, or JSON)",
+            },
+            "name": {
+                "type": "string",
+                "description": "Name for the dataset (defaults to filename stem). Use this name in QueryData and CreateChart.",
+            },
         },
         "required": ["file_path"],
     },
@@ -299,12 +311,24 @@ register_tool(
 register_tool(
     name="QueryData",
     aliases=["query_data"],
-    description="Run a pandas expression on a loaded dataset. The dataset is available as 'df'.",
+    description=(
+        "Run a pandas expression on a previously loaded dataset. The dataset is available as 'df'. "
+        "Use for filtering, grouping, aggregating, sorting, and transforming data. "
+        "Examples: 'df.groupby(\"region\").sum()', 'df[df[\"price\"] > 100]', 'df.describe()'. "
+        "If the result is a DataFrame, it replaces the dataset (so you can chain operations). "
+        "The dataset must be loaded first via LoadData."
+    ),
     input_schema={
         "type": "object",
         "properties": {
-            "name": {"type": "string", "description": "Dataset name"},
-            "code": {"type": "string", "description": "Pandas expression (e.g., 'df.groupby(\"col\").mean()')"},
+            "name": {
+                "type": "string",
+                "description": "Dataset name (as given to or returned by LoadData)",
+            },
+            "code": {
+                "type": "string",
+                "description": "Pandas expression to evaluate. 'df' is the DataFrame, 'pd' is pandas. E.g. 'df.groupby(\"col\").mean()'",
+            },
         },
         "required": ["name", "code"],
     },
@@ -314,13 +338,26 @@ register_tool(
 register_tool(
     name="ExportData",
     aliases=["export_data"],
-    description="Export a loaded dataset to CSV, Excel, or JSON.",
+    description=(
+        "Export a loaded dataset to a file. Supports CSV, Excel, and JSON formats. "
+        "The dataset must be loaded first via LoadData (and optionally transformed via QueryData)."
+    ),
     input_schema={
         "type": "object",
         "properties": {
-            "name": {"type": "string", "description": "Dataset name"},
-            "file_path": {"type": "string", "description": "Output file path"},
-            "format": {"type": "string", "enum": ["csv", "excel", "json"], "description": "Output format"},
+            "name": {
+                "type": "string",
+                "description": "Dataset name to export",
+            },
+            "file_path": {
+                "type": "string",
+                "description": "Absolute path for the output file",
+            },
+            "format": {
+                "type": "string",
+                "enum": ["csv", "excel", "json"],
+                "description": "Output format (default: csv)",
+            },
         },
         "required": ["name", "file_path"],
     },

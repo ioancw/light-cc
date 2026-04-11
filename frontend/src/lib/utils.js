@@ -11,7 +11,12 @@ export function debounce(fn, ms) {
 export function formatTime(ts) {
   if (!ts) return '';
   const d = new Date(ts);
-  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const now = new Date();
+  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  // Same day: just show time. Different day: show date + time.
+  if (d.toDateString() === now.toDateString()) return time;
+  const date = d.toLocaleDateString([], { day: 'numeric', month: 'short' });
+  return `${date}, ${time}`;
 }
 
 export function formatTokens(n) {

@@ -67,23 +67,19 @@ async def websocket_endpoint(
     await ws.accept()
 
     # ── Authenticate ──
-    # Prefer first-message auth; fall back to query param (deprecated)
-    token = ws.query_params.get("token")
+    # Wait for auth token in the first message
+    token = None
     user_id = "default"
     user_email = ""
     user_display_name = "User"
+    user_is_admin = False
 
-    if token:
-        logger.warning("WebSocket auth via query param is deprecated; send token in first message instead")
-
-    # If no query param token, wait for an auth message
-    if not token:
-        try:
-            first_msg = await asyncio.wait_for(ws.receive_json(), timeout=10.0)
-            if first_msg.get("type") == "auth":
-                token = first_msg.get("data", {}).get("token") or first_msg.get("token")
-        except (asyncio.TimeoutError, Exception):
-            pass
+    try:
+        first_msg = await asyncio.wait_for(ws.receive_json(), timeout=10.0)
+        if first_msg.get("type") == "auth":
+            token = first_msg.get("data", {}).get("token") or first_msg.get("token")
+    except (asyncio.TimeoutError, Exception):
+        pass
 
     if token:
         payload = decode_token(token)
@@ -93,11 +89,13 @@ async def websocket_endpoint(
                 return
             user_id = payload["sub"]
             user_email = payload.get("email", "")
+            user_is_admin = False
             db = await get_db()
             try:
                 user = await get_user_by_id(db, user_id)
                 if user:
                     user_display_name = user.display_name
+                    user_is_admin = user.is_admin
             finally:
                 await db.close()
         else:
@@ -106,6 +104,7 @@ async def websocket_endpoint(
 
     session_id = str(uuid.uuid4())
     create_connection(session_id, user_id=user_id)
+    connection_set(session_id, "is_admin", user_is_admin)
     session_opened()
 
     if has_hooks("SessionStart"):
@@ -166,6 +165,7 @@ async def websocket_endpoint(
         "model": settings.model,
         "available_models": settings.available_models,
         "skills": skills_for_client,
+        "suggestions": settings.suggestions,
         "user": {
             "id": user_id,
             "email": user_email,
