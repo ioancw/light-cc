@@ -117,6 +117,47 @@ class TestToolExecution:
         assert len(result) == 4
 
     @pytest.mark.asyncio
+    async def test_multi_turn_tool_loop(self, mock_anthropic_client):
+        """Agent should handle multiple sequential tool calls before final text."""
+        from core.agent import run
+
+        _, set_responses = mock_anthropic_client
+
+        # Turn 1: first tool call
+        tool1 = _build_tool_events("t1", "Read", {"file_path": "a.py"}, index=0)
+        # Turn 2: second tool call
+        tool2 = _build_tool_events("t2", "Grep", {"pattern": "def main"}, index=0)
+        # Turn 3: final text
+        text = _build_text_events("Found the function in a.py")
+
+        set_responses([tool1, tool2, text])
+
+        tool_names_seen: list[str] = []
+
+        async def track_tool_start(name, inp):
+            tool_names_seen.append(name)
+            return f"ctx_{name}"
+
+        with patch("core.agent.execute_tool", new_callable=AsyncMock, return_value='{"ok": true}'):
+            with patch("core.rate_limit.check_rate_limit", return_value=(True, "")):
+                result = await run(
+                    messages=[{"role": "user", "content": "Find main function"}],
+                    tools=[
+                        {"name": "Read", "description": "Read", "input_schema": {}},
+                        {"name": "Grep", "description": "Grep", "input_schema": {}},
+                    ],
+                    system="test",
+                    on_text=AsyncMock(),
+                    on_tool_start=track_tool_start,
+                    on_tool_end=AsyncMock(),
+                )
+
+        assert tool_names_seen == ["Read", "Grep"]
+        # Messages: user, assistant+tool, tool_result, assistant+tool, tool_result, assistant+text
+        assert len(result) == 6
+        assert result[-1]["content"][0]["text"] == "Found the function in a.py"
+
+    @pytest.mark.asyncio
     async def test_permission_denied(self, mock_anthropic_client):
         """When on_permission_check returns a string, tool should be denied."""
         from core.agent import run

@@ -117,7 +117,12 @@ register_tool(
         "properties": {
             "command": {
                 "type": "string",
-                "description": "The shell command to execute",
+                "description": (
+                    "The shell command to execute (e.g. 'git status', 'npm install', "
+                    "'curl http://localhost:8000/health'). Runs via subprocess in the project "
+                    "directory. Chain with '&&' for sequential commands. Quote paths that "
+                    "contain spaces. Use forward slashes in paths on Windows."
+                ),
             },
             "timeout": {
                 "type": "integer",

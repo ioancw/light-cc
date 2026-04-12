@@ -14,6 +14,7 @@ import tools.glob_tool  # noqa: F401
 import tools.python_exec  # noqa: F401
 import tools.subagent  # noqa: F401
 import tools.tasks  # noqa: F401
+import tools.skill_tool  # noqa: F401
 import tools.eval_optimize  # noqa: F401
 import tools.tool_search  # noqa: F401
 import memory.manager  # noqa: F401 — registers memory tools

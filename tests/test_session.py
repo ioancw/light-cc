@@ -194,3 +194,132 @@ class TestGetConnectionCids:
 
     def test_nonexistent_session(self, clean_sessions):
         assert get_connection_cids("missing") == set()
+
+
+# ── Auto-memory extraction enqueue hook ───────────────────────────────
+
+class TestMaybeEnqueueExtract:
+    """Verifies the opt-in debouncing logic in ``_maybe_enqueue_extract``.
+
+    The function should:
+    - Do nothing when the user has ``auto_extract_enabled=False``.
+    - Do nothing until the conversation has ``auto_extract_min_messages`` total
+      messages (threshold check).
+    - Do nothing again until another ``auto_extract_min_messages`` messages
+      have been appended since the previous enqueue (debounce).
+    - Enqueue the job otherwise, with the conversation_id and user_id.
+    """
+
+    @pytest.mark.asyncio
+    async def test_skip_when_disabled(self, test_db, test_user, monkeypatch):
+        from core import session as sess
+
+        calls = []
+
+        async def _fake_enqueue(name, **kwargs):
+            calls.append((name, kwargs))
+
+        async def _fake_get_db():
+            return test_db
+
+        monkeypatch.setattr("core.job_queue.enqueue", _fake_enqueue)
+        monkeypatch.setattr("core.database.get_db", _fake_get_db)
+
+        # User defaults to auto_extract_enabled=False
+        cs = {"messages": [{"role": "user", "content": "a"}] * 10}
+        await sess._maybe_enqueue_extract(cs, test_user.id, "conv1")
+        assert calls == []
+
+    @pytest.mark.asyncio
+    async def test_skip_below_threshold(self, test_db, test_user, monkeypatch):
+        from core import session as sess
+
+        test_user.auto_extract_enabled = True
+        test_user.auto_extract_min_messages = 4
+        test_db.add(test_user)
+        await test_db.commit()
+
+        calls = []
+
+        async def _fake_enqueue(name, **kwargs):
+            calls.append((name, kwargs))
+
+        async def _fake_get_db():
+            return test_db
+
+        monkeypatch.setattr("core.job_queue.enqueue", _fake_enqueue)
+        monkeypatch.setattr("core.database.get_db", _fake_get_db)
+
+        cs = {"messages": [{"role": "user", "content": "a"}] * 3}
+        await sess._maybe_enqueue_extract(cs, test_user.id, "conv1")
+        assert calls == []
+
+    @pytest.mark.asyncio
+    async def test_enqueues_when_enabled_and_above_threshold(
+        self, test_db, test_user, monkeypatch,
+    ):
+        from core import session as sess
+
+        test_user.auto_extract_enabled = True
+        test_user.auto_extract_min_messages = 4
+        test_db.add(test_user)
+        await test_db.commit()
+
+        calls = []
+
+        async def _fake_enqueue(name, **kwargs):
+            calls.append((name, kwargs))
+
+        async def _fake_get_db():
+            return test_db
+
+        monkeypatch.setattr("core.job_queue.enqueue", _fake_enqueue)
+        monkeypatch.setattr("core.database.get_db", _fake_get_db)
+
+        cs = {"messages": [{"role": "user", "content": "a"}] * 6}
+        await sess._maybe_enqueue_extract(cs, test_user.id, "conv-x")
+
+        assert len(calls) == 1
+        name, kwargs = calls[0]
+        assert name == "extract_memories_from_conversation"
+        assert kwargs == {"conversation_id": "conv-x", "user_id": test_user.id}
+        # Debounce state recorded on the conv session
+        assert cs["_last_extract_msg_count"] == 6
+
+    @pytest.mark.asyncio
+    async def test_debounce_waits_for_next_batch(
+        self, test_db, test_user, monkeypatch,
+    ):
+        from core import session as sess
+
+        test_user.auto_extract_enabled = True
+        test_user.auto_extract_min_messages = 4
+        test_db.add(test_user)
+        await test_db.commit()
+
+        calls = []
+
+        async def _fake_enqueue(name, **kwargs):
+            calls.append((name, kwargs))
+
+        async def _fake_get_db():
+            return test_db
+
+        monkeypatch.setattr("core.job_queue.enqueue", _fake_enqueue)
+        monkeypatch.setattr("core.database.get_db", _fake_get_db)
+
+        # First pass: 6 messages → enqueue once
+        cs = {"messages": [{"role": "user", "content": "a"}] * 6}
+        await sess._maybe_enqueue_extract(cs, test_user.id, "c1")
+        assert len(calls) == 1
+
+        # Add 3 more messages (below the 4-threshold gap) → still only 1 call
+        cs["messages"].extend([{"role": "user", "content": "b"}] * 3)
+        await sess._maybe_enqueue_extract(cs, test_user.id, "c1")
+        assert len(calls) == 1
+
+        # Add 1 more (total 10, 4 since last enqueue) → second call
+        cs["messages"].append({"role": "user", "content": "c"})
+        await sess._maybe_enqueue_extract(cs, test_user.id, "c1")
+        assert len(calls) == 2
+        assert cs["_last_extract_msg_count"] == 10

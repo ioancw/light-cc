@@ -189,3 +189,144 @@ export async function uploadFile(path, file) {
   if (!resp.ok) throw new Error(await resp.text());
   return resp.json();
 }
+
+// ── Agents ──
+
+export async function listAgents() {
+  const resp = await fetch('/api/agents', { headers: authHeaders() });
+  if (!resp.ok) throw new Error(await resp.text());
+  return resp.json();
+}
+
+export async function getAgent(id) {
+  const resp = await fetch(`/api/agents/${id}`, { headers: authHeaders() });
+  if (!resp.ok) throw new Error(await resp.text());
+  return resp.json();
+}
+
+export async function createAgent(payload) {
+  const resp = await fetch('/api/agents', {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify(payload),
+  });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}));
+    throw new Error(err.detail || 'Create agent failed');
+  }
+  return resp.json();
+}
+
+export async function updateAgent(id, payload) {
+  const resp = await fetch(`/api/agents/${id}`, {
+    method: 'PATCH',
+    headers: authHeaders(),
+    body: JSON.stringify(payload),
+  });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}));
+    throw new Error(err.detail || 'Update agent failed');
+  }
+  return resp.json();
+}
+
+export async function deleteAgent(id) {
+  const resp = await fetch(`/api/agents/${id}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  });
+  if (!resp.ok && resp.status !== 204) throw new Error(await resp.text());
+}
+
+export async function runAgent(id) {
+  const resp = await fetch(`/api/agents/${id}/run`, {
+    method: 'POST',
+    headers: authHeaders(),
+  });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}));
+    throw new Error(err.detail || 'Trigger agent failed');
+  }
+  return resp.json();
+}
+
+export async function listAgentRuns(id, limit = 20) {
+  const resp = await fetch(`/api/agents/${id}/runs?limit=${limit}`, {
+    headers: authHeaders(),
+  });
+  if (!resp.ok) throw new Error(await resp.text());
+  return resp.json();
+}
+
+// ── Memory ──
+
+export async function listMemories({ memory_type, source } = {}) {
+  const qs = new URLSearchParams();
+  if (memory_type) qs.set('memory_type', memory_type);
+  if (source) qs.set('source', source);
+  const url = '/api/memories' + (qs.toString() ? `?${qs}` : '');
+  const resp = await fetch(url, { headers: authHeaders() });
+  if (!resp.ok) throw new Error(await resp.text());
+  return resp.json();
+}
+
+export async function getMemory(id) {
+  const resp = await fetch(`/api/memories/${id}`, { headers: authHeaders() });
+  if (!resp.ok) throw new Error(await resp.text());
+  return resp.json();
+}
+
+export async function createMemory(payload) {
+  const resp = await fetch('/api/memories', {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify(payload),
+  });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}));
+    throw new Error(err.detail || 'Create memory failed');
+  }
+  return resp.json();
+}
+
+export async function updateMemory(id, payload) {
+  const resp = await fetch(`/api/memories/${id}`, {
+    method: 'PATCH',
+    headers: authHeaders(),
+    body: JSON.stringify(payload),
+  });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}));
+    throw new Error(err.detail || 'Update memory failed');
+  }
+  return resp.json();
+}
+
+export async function deleteMemory(id) {
+  const resp = await fetch(`/api/memories/${id}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  });
+  if (!resp.ok && resp.status !== 204) throw new Error(await resp.text());
+}
+
+// ── User settings ──
+
+export async function getUserSettings() {
+  const resp = await fetch('/api/users/me/settings', { headers: authHeaders() });
+  if (!resp.ok) throw new Error(await resp.text());
+  return resp.json();
+}
+
+export async function updateUserSettings(payload) {
+  const resp = await fetch('/api/users/me/settings', {
+    method: 'PATCH',
+    headers: authHeaders(),
+    body: JSON.stringify(payload),
+  });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}));
+    throw new Error(err.detail || 'Update settings failed');
+  }
+  return resp.json();
+}

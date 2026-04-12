@@ -25,6 +25,7 @@ class PathsConfig(BaseModel):
     ])
     commands_dirs: list[str] = Field(default_factory=lambda: ["commands"])
     plugins_dirs: list[str] = Field(default_factory=lambda: ["plugins"])
+    agents_dirs: list[str] = Field(default_factory=lambda: ["agents"])
     data_dir: str = "data"
     memory_dir: str = "data/users"
 

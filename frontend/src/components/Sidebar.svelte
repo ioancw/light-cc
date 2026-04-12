@@ -277,6 +277,8 @@
         >
           {#if conv.messages?.some(m => m.streaming)}
             <div class="chat-item-dot streaming"></div>
+          {:else if appState.loadingConversations.has(conv.serverId) || appState.loadingConversations.has(conv.id)}
+            <div class="chat-item-dot loading"></div>
           {:else}
             <div class="chat-item-dot" class:stub={conv.stub}></div>
           {/if}
@@ -573,6 +575,14 @@
   @keyframes streaming-pulse {
     0%, 100% { opacity: 0.3; transform: scale(1); }
     50% { opacity: 1; transform: scale(1.3); }
+  }
+  .chat-item-dot.loading {
+    background: var(--fg-dim);
+    animation: loading-shimmer 1.6s ease-in-out infinite;
+  }
+  @keyframes loading-shimmer {
+    0%, 100% { opacity: 0.25; }
+    50% { opacity: 0.7; }
   }
 
   .chat-item-title {

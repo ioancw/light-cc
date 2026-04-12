@@ -6,7 +6,7 @@ import json
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, String, Text, Integer, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, String, Text, Integer, UniqueConstraint, text as _sql_text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -31,6 +31,11 @@ class User(Base):
     display_name: Mapped[str] = mapped_column(String(100), nullable=False)
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    # Auto-memory extraction (S3). Default off; opt-in per user.
+    auto_extract_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=_sql_text("0"))
+    auto_extract_model: Mapped[str] = mapped_column(String(100), default="claude-haiku-4-5-20251001", server_default="claude-haiku-4-5-20251001")
+    auto_extract_min_messages: Mapped[int] = mapped_column(Integer, default=4, server_default=_sql_text("4"))
 
     conversations: Mapped[list[Conversation]] = relationship(back_populates="user", cascade="all, delete-orphan")
 
@@ -127,6 +132,11 @@ class Memory(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     memory_type: Mapped[str] = mapped_column(String(50), default="note")
     tags: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON array
+    # Provenance (S3). "user" = explicitly saved via tool; "auto" = auto-extracted.
+    source: Mapped[str] = mapped_column(String(20), default="user", server_default="user")
+    source_conversation_id: Mapped[str | None] = mapped_column(
+        String(32), ForeignKey("conversations.id"), nullable=True, index=True,
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
 
@@ -143,6 +153,75 @@ class Memory(Base):
     @tags_list.setter
     def tags_list(self, value: list[str]) -> None:
         self.tags = json.dumps(value) if value else None
+
+
+class AgentDefinition(Base):
+    """First-class agent definition: reusable, configurable, possibly scheduled."""
+
+    __tablename__ = "agent_definitions"
+    __table_args__ = (
+        UniqueConstraint("user_id", "name", name="uq_agent_user_name"),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_new_id)
+    user_id: Mapped[str] = mapped_column(String(32), ForeignKey("users.id"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    model: Mapped[str | None] = mapped_column(String(100), nullable=True)  # null = inherit default
+    system_prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    tools: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON array of tool names (null = all)
+    max_turns: Mapped[int] = mapped_column(Integer, default=20)
+    timeout_seconds: Mapped[int] = mapped_column(Integer, default=300)
+    memory_scope: Mapped[str] = mapped_column(String(20), default="user")  # "user" | "agent" | "none"
+    permissions: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON
+    trigger: Mapped[str] = mapped_column(String(20), default="manual")  # "manual" | "cron" | "webhook" | "api"
+    cron_expression: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    cron_timezone: Mapped[str] = mapped_column(String(50), default="UTC", server_default="UTC")
+    webhook_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    source: Mapped[str] = mapped_column(String(20), default="user")  # "user" | "yaml"
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+
+    runs: Mapped[list["AgentRun"]] = relationship(
+        back_populates="agent", cascade="all, delete-orphan",
+        order_by="AgentRun.started_at.desc()",
+    )
+
+    @property
+    def tools_list(self) -> list[str] | None:
+        if not self.tools:
+            return None
+        try:
+            return json.loads(self.tools)
+        except (json.JSONDecodeError, TypeError):
+            return None
+
+    @tools_list.setter
+    def tools_list(self, value: list[str] | None) -> None:
+        self.tools = json.dumps(value) if value else None
+
+
+class AgentRun(Base):
+    """Execution record of an AgentDefinition."""
+
+    __tablename__ = "agent_runs"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_new_id)
+    agent_id: Mapped[str] = mapped_column(String(32), ForeignKey("agent_definitions.id"), nullable=False, index=True)
+    user_id: Mapped[str] = mapped_column(String(32), ForeignKey("users.id"), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="running")  # running|completed|failed
+    trigger_type: Mapped[str] = mapped_column(String(20), nullable=False, default="manual")
+    result: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    tokens_used: Mapped[int] = mapped_column(Integer, default=0)
+    conversation_id: Mapped[str | None] = mapped_column(String(32), ForeignKey("conversations.id"), nullable=True)
+
+    agent: Mapped["AgentDefinition"] = relationship(back_populates="runs")
 
 
 class AuditEvent(Base):

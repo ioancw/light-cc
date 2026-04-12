@@ -1,7 +1,7 @@
 // WebSocket client with reconnection and event dispatch.
 // Supports multiplexed conversations via `cid` envelope field.
 
-import { appState, clearAuth, showToast } from './state.svelte.js';
+import { appState, clearAuth, showToast, isConversationLoading } from './state.svelte.js';
 import { fetchConversationHistory } from './api.js';
 
 let ws = null;
@@ -66,6 +66,10 @@ export function send(type, data = {}, cid = null) {
   if (ws && ws.readyState === WebSocket.OPEN) {
     const msg = { type, data };
     if (cid) msg.cid = cid;
+    // Track loading state for conversation resumes
+    if (type === 'resume_conversation' && cid) {
+      appState.loadingConversations.add(cid);
+    }
     ws.send(JSON.stringify(msg));
   }
 }
@@ -122,6 +126,7 @@ function handleEvent(type, data, cid = null) {
       break;
 
     case 'conversation_loaded':
+      if (cid) appState.loadingConversations.delete(cid);
       if (conv) conv.stub = false;
       if (conv && data.messages && data.messages.length > 0) {
         conv.messages = data.messages.map((m, i) => ({
@@ -317,6 +322,15 @@ function handleEvent(type, data, cid = null) {
       }
       break;
 
+    case 'agent_result': {
+      const convId = data.conversation_id;
+      const aname = data.agent_name || 'Agent';
+      const alabel = data.status === 'completed' ? 'completed' : 'failed';
+      showToast(`[Agent] ${aname} ${alabel}`, alabel === 'failed' ? 'error' : 'info');
+      fetchConversationHistory();
+      break;
+    }
+
     case 'schedule_result': {
       const convId = data.conversation_id;
       const sname = data.schedule_name || 'Scheduled task';
@@ -348,6 +362,7 @@ function handleEvent(type, data, cid = null) {
       break;
 
     case 'error':
+      if (cid) appState.loadingConversations.delete(cid);
       if (msg) {
         msg.content += '\n\nError: ' + data.message;
         msg.streaming = false;

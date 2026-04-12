@@ -17,7 +17,7 @@ from croniter import croniter
 from sqlalchemy import select, update
 
 from core.database import get_db
-from core.db_models import Schedule, ScheduleRun
+from core.db_models import AgentDefinition, Schedule, ScheduleRun
 from core.job_queue import register_job
 
 logger = logging.getLogger(__name__)
@@ -273,7 +273,7 @@ async def _execute_schedule(
 
 
 async def _scheduler_loop() -> None:
-    """Main loop: check for due schedules every CHECK_INTERVAL seconds."""
+    """Main loop: check for due schedules and cron-triggered agents every CHECK_INTERVAL seconds."""
     while True:
         try:
             db = await get_db()
@@ -307,6 +307,30 @@ async def _scheduler_loop() -> None:
                 sched.next_run_at = _compute_next_run(sched.cron_expression, now, sched.user_timezone)
                 await db.commit()
 
+            # Cron-triggered AgentDefinitions
+            agent_stmt = select(AgentDefinition).where(
+                AgentDefinition.enabled == True,  # noqa: E712
+                AgentDefinition.trigger == "cron",
+                AgentDefinition.next_run_at != None,  # noqa: E711
+                AgentDefinition.next_run_at <= now,
+            )
+            agent_result = await db.execute(agent_stmt)
+            due_agents = agent_result.scalars().all()
+
+            for a in due_agents:
+                if not a.cron_expression:
+                    continue
+                logger.info(f"Firing cron agent: {a.name} (id={a.id})")
+                try:
+                    from core.agent_runner import trigger_agent_run
+                    await trigger_agent_run(a, trigger_type="cron")
+                except Exception as e:
+                    logger.error(f"Failed to trigger cron agent '{a.name}': {e}")
+                    continue
+
+                a.next_run_at = _compute_next_run(a.cron_expression, now, a.cron_timezone or "UTC")
+                await db.commit()
+
             await db.close()
         except Exception as e:
             logger.error(f"Scheduler loop error: {e}")
@@ -328,6 +352,18 @@ async def start_scheduler() -> None:
         result = await db.execute(stmt)
         for sched in result.scalars().all():
             sched.next_run_at = _compute_next_run(sched.cron_expression, user_tz=sched.user_timezone)
+
+        # Same for cron-triggered AgentDefinitions
+        agent_stmt = select(AgentDefinition).where(
+            AgentDefinition.enabled == True,  # noqa: E712
+            AgentDefinition.trigger == "cron",
+            AgentDefinition.cron_expression != None,  # noqa: E711
+            AgentDefinition.next_run_at == None,  # noqa: E711
+        )
+        agent_result = await db.execute(agent_stmt)
+        for a in agent_result.scalars().all():
+            a.next_run_at = _compute_next_run(a.cron_expression, user_tz=a.cron_timezone or "UTC")
+
         await db.commit()
     finally:
         await db.close()

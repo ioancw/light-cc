@@ -44,6 +44,9 @@ export const appState = $state({
   // Inline status messages (shown in input footer instead of toasts)
   inlineStatus: null, // { message, type } or null
 
+  // Loading conversations (set of cids currently being loaded from server)
+  loadingConversations: new Set(),
+
   // Scroll state (shared between ChatArea and InputBar)
   needsScrollDown: false,
   scrollToBottom: null, // function ref set by ChatArea
@@ -147,6 +150,10 @@ export function pendingPermission() {
   const conv = appState.conversations[id];
   const serverId = conv?.serverId;
   return appState.pendingPermissions[id] || (serverId && appState.pendingPermissions[serverId]) || null;
+}
+
+export function isConversationLoading(cid) {
+  return cid && appState.loadingConversations.has(cid);
 }
 
 export function getStreamingMessage(convId = null) {

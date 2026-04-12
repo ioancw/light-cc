@@ -363,7 +363,54 @@ async def save_conversation(cid: str) -> str | None:
         finally:
             await db.close()
 
+        # S3: opportunistically enqueue auto-memory extraction.
+        # Cheap short-circuit: skip the default user and unsaved conversations.
+        if conv_id and user_id and user_id != "default":
+            try:
+                await _maybe_enqueue_extract(cs, user_id, conv_id)
+            except Exception:
+                # Extraction is strictly best-effort. Never fail the save.
+                pass
+
         return conv_id
+
+
+async def _maybe_enqueue_extract(cs: dict, user_id: str, conv_id: str) -> None:
+    """Enqueue the memory extractor if the user has opted in and enough
+    new messages have accumulated since the last extraction.
+
+    Debounced by ``auto_extract_min_messages`` per conversation.
+    """
+    from core.database import get_db
+    from core.db_models import User
+    from core.job_queue import enqueue
+    from sqlalchemy import select
+
+    db = await get_db()
+    try:
+        user = (await db.execute(
+            select(User).where(User.id == user_id)
+        )).scalar_one_or_none()
+    finally:
+        await db.close()
+
+    if user is None or not user.auto_extract_enabled:
+        return
+
+    threshold = max(1, int(user.auto_extract_min_messages or 4))
+    current_count = len(cs.get("messages") or [])
+    last_count = int(cs.get("_last_extract_msg_count") or 0)
+    if current_count < threshold:
+        return
+    if current_count - last_count < threshold:
+        return
+
+    cs["_last_extract_msg_count"] = current_count
+    await enqueue(
+        "extract_memories_from_conversation",
+        conversation_id=conv_id,
+        user_id=user_id,
+    )
 
 
 async def load_conversation(conversation_id: str) -> list[dict[str, Any]]:

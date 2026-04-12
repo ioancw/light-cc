@@ -31,6 +31,8 @@ from routes.admin import router as admin_router
 from routes.files import router as files_router
 from routes.usage import router as usage_router
 from routes.schedules import router as schedules_router
+from routes.agents import router as agents_router
+from routes.memory import router as memory_router
 
 import tools  # noqa: F401 — triggers tool registration
 
@@ -191,6 +193,8 @@ app.include_router(admin_router)
 app.include_router(files_router)
 app.include_router(usage_router)
 app.include_router(schedules_router)
+app.include_router(agents_router)
+app.include_router(memory_router)
 app.mount("/static", StaticFiles(directory=str(_PROJECT_ROOT / "static")), name="static")
 
 _SVELTE_DIST = _PROJECT_ROOT / "frontend" / "dist"
@@ -216,8 +220,9 @@ async def startup():
     except Exception as e:
         logger.debug(f"FastAPI instrumentation failed: {e}")
 
-    # Auto-run Alembic migrations for PostgreSQL deployments
-    # Uses an advisory lock to prevent race conditions in multi-replica deploys
+    # Auto-run Alembic migrations. On PostgreSQL we take an advisory lock so
+    # multi-replica deploys don't race. On SQLite we just run the upgrade —
+    # single-process, no lock needed.
     if "postgresql" in settings.database_url:
         try:
             from sqlalchemy import text, create_engine
@@ -239,10 +244,23 @@ async def startup():
             sync_engine.dispose()
         except Exception as e:
             logger.warning(f"Auto-migration failed (run 'alembic upgrade head' manually): {e}")
+    elif "sqlite" in settings.database_url:
+        try:
+            from alembic.config import Config as AlembicConfig
+            from alembic import command as alembic_command
+            alembic_cfg = AlembicConfig(str(_PROJECT_ROOT / "alembic.ini"))
+            alembic_cfg.set_main_option("script_location", str(_PROJECT_ROOT / "alembic"))
+            alembic_command.upgrade(alembic_cfg, "head")
+            logger.info("Alembic migrations applied successfully (sqlite)")
+        except Exception as e:
+            logger.warning(f"Auto-migration failed (run 'alembic upgrade head' manually): {e}")
 
     await init_db()
     await init_redis()
     await init_job_queue()
+    # Register background jobs so the asyncio fallback can find them by name.
+    import core.agent_runner  # noqa: F401 — registers "execute_agent_run"
+    import core.memory_extractor  # noqa: F401 — registers "extract_memories_from_conversation"
     load_hooks(settings.hooks)
 
     from core.plugin_loader import get_plugin_loader
@@ -257,6 +275,36 @@ async def startup():
     if project_mcp.exists():
         from core.mcp_client import load_mcp_config
         await load_mcp_config(str(project_mcp))
+
+    # Sync YAML-defined agents into the DB for every existing user, so
+    # agent definitions committed to the repo show up in AgentPanel
+    # automatically. New users get their copy when they sign up.
+    try:
+        from core.agent_loader import sync_agents_to_db
+        from core.database import get_db
+        from core.db_models import User
+        from sqlalchemy import select as _select
+
+        user_rows: list[str] = []
+        _db = await get_db()
+        try:
+            _res = await _db.execute(_select(User.id))
+            user_rows = list(_res.scalars().all())
+        finally:
+            await _db.close()
+
+        for agents_dir in settings.paths.agents_dirs:
+            resolved = Path(agents_dir).expanduser()
+            if not resolved.is_absolute():
+                resolved = _PROJECT_ROOT / resolved
+            if not resolved.exists():
+                continue
+            total = 0
+            for uid in user_rows:
+                total += await sync_agents_to_db(resolved, uid)
+            logger.info(f"Agent YAML sync: {total} agent(s) upserted from {resolved}")
+    except Exception as e:
+        logger.warning(f"Agent YAML sync failed: {e}")
 
     from core.scheduler import start_scheduler
     await start_scheduler()

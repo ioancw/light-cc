@@ -124,6 +124,22 @@ async def register(req: RegisterRequest):
     finally:
         await db.close()
 
+    # Seed YAML-defined agents for the new user, so they see the shipped
+    # example agents in AgentPanel on first login. Best-effort.
+    try:
+        from pathlib import Path
+        from core.agent_loader import sync_agents_to_db
+
+        _project_root = Path(__file__).resolve().parent.parent
+        for agents_dir in settings.paths.agents_dirs:
+            resolved = Path(agents_dir).expanduser()
+            if not resolved.is_absolute():
+                resolved = _project_root / resolved
+            if resolved.exists():
+                await sync_agents_to_db(resolved, user.id)
+    except Exception:
+        pass
+
     return TokenResponse(
         access_token=create_access_token(user.id, user.email),
         refresh_token=create_refresh_token(user.id),

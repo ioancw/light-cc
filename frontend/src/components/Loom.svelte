@@ -11,8 +11,12 @@
   import FilePanel from './FilePanel.svelte';
   import StatusBar from './StatusBar.svelte';
   import Settings from './Settings.svelte';
+  import AgentPanel from './AgentPanel.svelte';
+  import MemoryPanel from './MemoryPanel.svelte';
 
   let filePanelRef = $state(null);
+  let agentPanelRef = $state(null);
+  let memoryPanelRef = $state(null);
   let settingsOpen = $state(false);
 
   onMount(() => {
@@ -110,6 +114,20 @@
             <path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.41 1.41M11.54 11.54l1.41 1.41M3.05 12.95l1.41-1.41M11.54 4.46l1.41-1.41" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
           </svg>
         </button>
+        <button class="topbar-btn" onclick={() => agentPanelRef?.toggle()} title="Agents">
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+            <rect x="3" y="3" width="10" height="10" rx="2" stroke="currentColor" stroke-width="1.3" fill="none"/>
+            <circle cx="6" cy="7" r="0.8" fill="currentColor"/>
+            <circle cx="10" cy="7" r="0.8" fill="currentColor"/>
+            <path d="M6 10h4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+          </svg>
+        </button>
+        <button class="topbar-btn" onclick={() => memoryPanelRef?.toggle()} title="Memory">
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+            <path d="M4 2h6l2 2v10H4V2z" stroke="currentColor" stroke-width="1.3" fill="none"/>
+            <path d="M6 6h4M6 9h4M6 12h2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+          </svg>
+        </button>
         <button class="topbar-btn" onclick={() => filePanelRef?.toggle()} title="File browser">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
             <path d="M2 3h4l2 2h6v8H2V3z" stroke="currentColor" stroke-width="1.3" fill="none"/>
@@ -150,6 +168,8 @@
 </div>
 
 <FilePanel bind:this={filePanelRef} />
+<AgentPanel bind:this={agentPanelRef} />
+<MemoryPanel bind:this={memoryPanelRef} />
 <Settings bind:open={settingsOpen} />
 <PermissionDialog />
 <Toast />
