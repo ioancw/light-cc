@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from core.database import get_db
 from core.db_models import Memory, User as UserModel
 from memory.manager import (
+    _MEMORY_TYPES as _VALID_MEMORY_TYPES,
     delete_memory,
     list_memories,
     save_memory,
@@ -27,10 +28,6 @@ router = APIRouter(prefix="/api", tags=["memory"])
 
 
 # ── Schemas ──────────────────────────────────────────────────────────
-
-_VALID_MEMORY_TYPES = {
-    "note", "fact", "preference", "project", "reference", "feedback", "user",
-}
 
 
 class MemoryListItem(BaseModel):

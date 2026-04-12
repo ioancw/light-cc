@@ -19,6 +19,12 @@
     appState.connecting ? 'var(--amber)' :
     'var(--red)'
   );
+
+  let currentTokens = $derived(
+    appState.currentId && appState.conversations[appState.currentId]
+      ? (appState.conversations[appState.currentId].totalTokens || 0)
+      : 0
+  );
 </script>
 
 <div class="status-bar">
@@ -28,7 +34,7 @@
   </div>
   <span class="status-sep"></span>
   <div class="token-count">
-    <span class="token-value">{formatTokens(appState.totalTokens)}</span> tokens
+    <span class="token-value">{formatTokens(currentTokens)}</span> tokens
   </div>
 </div>
 

@@ -1,4 +1,5 @@
 <script>
+  import { onMount, onDestroy } from 'svelte';
   import { showToast, appState, switchConversation } from '../state.svelte.js';
   import { send } from '../ws.js';
   import { fetchConversationHistory } from '../api.js';
@@ -141,6 +142,19 @@
       showToast(e.message, 'error');
     }
   }
+
+  async function onAgentResult() {
+    // A run just finished — refresh whichever view is open so token counts,
+    // statuses, and last-run timestamps update without requiring a manual reload.
+    if (view === 'runs' && runsForAgent) {
+      try { runs = await listAgentRuns(runsForAgent.id, 20); } catch {}
+    } else if (view === 'list') {
+      try { agents = await listAgents(); } catch {}
+    }
+  }
+
+  onMount(() => { window.addEventListener('agent_result', onAgentResult); });
+  onDestroy(() => { window.removeEventListener('agent_result', onAgentResult); });
 
   function fmtDate(iso) {
     if (!iso) return '-';

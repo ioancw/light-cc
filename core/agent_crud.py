@@ -6,6 +6,7 @@ import json
 
 from croniter import croniter
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from core.database import get_db
 from core.db_models import AgentDefinition, AgentRun
@@ -52,21 +53,12 @@ async def create_agent(
     """Create a new agent definition. Raises ValueError for invalid input or duplicate name."""
     _validate_definition(trigger, cron_expression, memory_scope)
 
+    next_run_at = None
+    if trigger == "cron" and cron_expression:
+        next_run_at = _compute_next_run(cron_expression, user_tz=cron_timezone)
+
     db = await get_db()
     try:
-        existing = await db.execute(
-            select(AgentDefinition).where(
-                AgentDefinition.user_id == user_id,
-                AgentDefinition.name == name,
-            )
-        )
-        if existing.first():
-            raise ValueError(f"An agent named '{name}' already exists.")
-
-        next_run_at = None
-        if trigger == "cron" and cron_expression:
-            next_run_at = _compute_next_run(cron_expression, user_tz=cron_timezone)
-
         agent = AgentDefinition(
             user_id=user_id,
             name=name,
@@ -87,7 +79,11 @@ async def create_agent(
             next_run_at=next_run_at,
         )
         db.add(agent)
-        await db.commit()
+        try:
+            await db.commit()
+        except IntegrityError:
+            await db.rollback()
+            raise ValueError(f"An agent named '{name}' already exists.")
         await db.refresh(agent)
         return agent
     finally:

@@ -39,6 +39,7 @@ async def run(
     on_tool_start: Callable[[str, dict[str, Any]], Awaitable[Any]],
     on_tool_end: Callable[[Any, str], Awaitable[None]],
     on_permission_check: Callable[[str, dict[str, Any]], Awaitable[bool | str]] | None = None,
+    on_usage: Callable[[int, int], Awaitable[None]] | None = None,
     max_turns: int | None = None,
     model: str | None = None,
 ) -> list[dict[str, Any]]:
@@ -53,6 +54,7 @@ async def run(
         on_tool_end: Called when a tool finishes. Receives context from on_tool_start + result.
         on_permission_check: Called before tool execution. Return True to allow,
             or a string error message to deny.
+        on_usage: Called after each turn with (input_tokens, output_tokens).
         max_turns: Max loop iterations (default from config).
         model: Model override (default from config).
 
@@ -241,6 +243,11 @@ async def run(
                 )
             except Exception as e:
                 logger.debug(f"Usage recording failed: {e}")
+            if on_usage:
+                try:
+                    await on_usage(stream_usage["input"], stream_usage["output"])
+                except Exception as e:
+                    logger.debug(f"on_usage callback failed: {e}")
 
         # Append assistant message
         messages.append({"role": "assistant", "content": assistant_content})

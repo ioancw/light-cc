@@ -328,6 +328,7 @@ function handleEvent(type, data, cid = null) {
       const alabel = data.status === 'completed' ? 'completed' : 'failed';
       showToast(`[Agent] ${aname} ${alabel}`, alabel === 'failed' ? 'error' : 'info');
       fetchConversationHistory();
+      window.dispatchEvent(new CustomEvent('agent_result', { detail: data }));
       break;
     }
 

@@ -34,9 +34,10 @@ logger = logging.getLogger(__name__)
 # Default Haiku model for the extractor. Can be overridden per-user.
 _DEFAULT_MODEL = "claude-haiku-4-5-20251001"
 
-# Memory types the extractor is allowed to emit. Keeps the prompt simple
-# and mirrors ``memory.manager._MEMORY_TYPES`` (we omit "feedback" and
-# "user" which are really meta-categories).
+# Memory types the extractor is allowed to emit. This is a deliberate
+# subset of ``memory.manager._MEMORY_TYPES``: "feedback" and "user" are
+# meta-categories that users create manually via the Memory panel, not
+# things we auto-extract. Unknown types fall back to "note".
 _ALLOWED_TYPES = {"note", "fact", "preference", "project", "reference"}
 
 _EXTRACTION_SYSTEM_PROMPT = """You extract durable, reusable memories from a chat transcript.

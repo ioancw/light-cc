@@ -155,6 +155,11 @@ async def _execute_agent_run(
     status = "running"
     error: str | None = None
     tokens_used = 0
+
+    async def on_usage(input_tokens: int, output_tokens: int) -> None:
+        nonlocal tokens_used
+        tokens_used += input_tokens + output_tokens
+
     try:
         await agent_module.run(
             messages=messages,
@@ -164,6 +169,7 @@ async def _execute_agent_run(
             on_tool_start=on_tool_start,
             on_tool_end=on_tool_end,
             on_permission_check=perm_check,
+            on_usage=on_usage,
             max_turns=a_max_turns,
             model=a_model,
         )

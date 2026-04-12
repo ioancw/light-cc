@@ -5,6 +5,7 @@ Run with: uvicorn server:app --host 0.0.0.0 --port 8000 --reload
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 
@@ -223,34 +224,41 @@ async def startup():
     # Auto-run Alembic migrations. On PostgreSQL we take an advisory lock so
     # multi-replica deploys don't race. On SQLite we just run the upgrade —
     # single-process, no lock needed.
+    # alembic/env.py uses asyncio.run() internally, which cannot nest inside
+    # this async startup handler's loop — so we push the sync call to a thread.
+    def _run_pg_migrations() -> None:
+        from sqlalchemy import text, create_engine
+        from alembic.config import Config as AlembicConfig
+        from alembic import command as alembic_command
+        sync_url = settings.database_url.replace("+asyncpg", "")
+        sync_engine = create_engine(sync_url)
+        with sync_engine.connect() as conn:
+            conn.execute(text("SELECT pg_advisory_lock(42)"))
+            try:
+                alembic_cfg = AlembicConfig(str(_PROJECT_ROOT / "alembic.ini"))
+                alembic_cfg.set_main_option("script_location", str(_PROJECT_ROOT / "alembic"))
+                alembic_command.upgrade(alembic_cfg, "head")
+            finally:
+                conn.execute(text("SELECT pg_advisory_unlock(42)"))
+                conn.commit()
+        sync_engine.dispose()
+
+    def _run_sqlite_migrations() -> None:
+        from alembic.config import Config as AlembicConfig
+        from alembic import command as alembic_command
+        alembic_cfg = AlembicConfig(str(_PROJECT_ROOT / "alembic.ini"))
+        alembic_cfg.set_main_option("script_location", str(_PROJECT_ROOT / "alembic"))
+        alembic_command.upgrade(alembic_cfg, "head")
+
     if "postgresql" in settings.database_url:
         try:
-            from sqlalchemy import text, create_engine
-            sync_url = settings.database_url.replace("+asyncpg", "")
-            sync_engine = create_engine(sync_url)
-            with sync_engine.connect() as conn:
-                # pg_advisory_lock with a fixed key prevents concurrent migrations
-                conn.execute(text("SELECT pg_advisory_lock(42)"))
-                try:
-                    from alembic.config import Config as AlembicConfig
-                    from alembic import command as alembic_command
-                    alembic_cfg = AlembicConfig(str(_PROJECT_ROOT / "alembic.ini"))
-                    alembic_cfg.set_main_option("script_location", str(_PROJECT_ROOT / "alembic"))
-                    alembic_command.upgrade(alembic_cfg, "head")
-                    logger.info("Alembic migrations applied successfully")
-                finally:
-                    conn.execute(text("SELECT pg_advisory_unlock(42)"))
-                    conn.commit()
-            sync_engine.dispose()
+            await asyncio.to_thread(_run_pg_migrations)
+            logger.info("Alembic migrations applied successfully")
         except Exception as e:
             logger.warning(f"Auto-migration failed (run 'alembic upgrade head' manually): {e}")
     elif "sqlite" in settings.database_url:
         try:
-            from alembic.config import Config as AlembicConfig
-            from alembic import command as alembic_command
-            alembic_cfg = AlembicConfig(str(_PROJECT_ROOT / "alembic.ini"))
-            alembic_cfg.set_main_option("script_location", str(_PROJECT_ROOT / "alembic"))
-            alembic_command.upgrade(alembic_cfg, "head")
+            await asyncio.to_thread(_run_sqlite_migrations)
             logger.info("Alembic migrations applied successfully (sqlite)")
         except Exception as e:
             logger.warning(f"Auto-migration failed (run 'alembic upgrade head' manually): {e}")
