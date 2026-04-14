@@ -108,7 +108,11 @@ async def _execute_agent_run(
     finally:
         await db.close()
 
-    # Set session context so tools can resolve the user
+    # Set session context so tools can resolve the user. We create a synthetic
+    # ``agent-{run_id}`` session with only ``user_id`` populated -- there is no
+    # conversation attached and no message history. Tools that call
+    # ``current_conversation()`` or expect ``messages``/``active_model`` from
+    # the session must handle missing values; agent runs are stateless.
     session_id = f"agent-{run_id}"
     set_current_session(session_id)
     current_session_set("user_id", user_id)

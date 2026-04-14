@@ -275,6 +275,65 @@ class TestExecuteAgentRun:
         assert payload["trigger_type"] == "manual"
 
     @pytest.mark.asyncio
+    async def test_overlapping_runs_of_same_agent(self, test_user, mock_anthropic_client, mock_webhook):
+        """Two back-to-back runs of the same agent must produce distinct
+        AgentRun rows and distinct conversations. Uses a per-call session
+        factory to mirror production (where each get_db() call is fresh)
+        rather than the shared-session fixture used by sibling tests."""
+        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine, AsyncSession
+        from core.db_models import Base as _Base
+
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+        async with engine.begin() as conn:
+            await conn.run_sync(_Base.metadata.create_all)
+        factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+        # Re-attach the user into the new engine
+        async with factory() as s:
+            u = type(test_user)(
+                email="conc@example.com", password_hash="x", display_name="c",
+            )
+            s.add(u)
+            await s.commit()
+            await s.refresh(u)
+            user_id = u.id
+
+        async def _fresh_db():
+            return factory()
+
+        with patch("core.agent_crud.get_db", side_effect=_fresh_db), \
+             patch("core.agent_runner.get_db", side_effect=_fresh_db):
+            agent = await create_agent(
+                user_id=user_id, name="concurrent", description="d", system_prompt="p",
+            )
+
+            async with factory() as s:
+                run_a = AgentRun(agent_id=agent.id, user_id=user_id, status="running", trigger_type="manual")
+                run_b = AgentRun(agent_id=agent.id, user_id=user_id, status="running", trigger_type="manual")
+                s.add_all([run_a, run_b])
+                await s.commit()
+                await s.refresh(run_a)
+                await s.refresh(run_b)
+                run_a_id, run_b_id = run_a.id, run_b.id
+
+            _, set_responses = mock_anthropic_client
+            set_responses([_build_text_events("reply A"), _build_text_events("reply B")])
+
+            await _execute_agent_run(agent_id=agent.id, run_id=run_a_id, trigger_type="manual")
+            await _execute_agent_run(agent_id=agent.id, run_id=run_b_id, trigger_type="manual")
+
+        async with factory() as s:
+            refreshed = (await s.execute(
+                select(AgentRun).where(AgentRun.agent_id == agent.id),
+            )).scalars().all()
+            assert len(refreshed) == 2
+            assert all(r.status == "completed" for r in refreshed)
+            conv_ids = {r.conversation_id for r in refreshed}
+            assert len(conv_ids) == 2 and None not in conv_ids
+
+        await engine.dispose()
+
+    @pytest.mark.asyncio
     async def test_webhook_skipped_when_no_url(self, runner_db, mock_anthropic_client):
         db, user = runner_db
         agent = await create_agent(

@@ -111,3 +111,23 @@ async def execute_tool(name: str, tool_input: dict[str, Any]) -> str:
 def list_tool_names() -> list[str]:
     """List all registered tool names (canonical only)."""
     return list(_TOOLS.keys())
+
+
+def get_tool_description(name: str) -> str:
+    """Return the registered description for a tool, or '' if unknown.
+
+    Resolves aliases and falls back to MCP-discovered tools if the name isn't
+    built-in. Used by the chat UI to show what a tool does in expanded tool
+    cards without hard-coding descriptions client-side.
+    """
+    resolved = resolve_tool_name(name)
+    if resolved in _TOOLS:
+        return _TOOLS[resolved][1].get("description", "")
+    try:
+        from core.mcp_client import get_mcp_manager
+        for s in get_mcp_manager().get_all_tool_schemas():
+            if s.get("name") == name:
+                return s.get("description", "")
+    except Exception:
+        pass
+    return ""

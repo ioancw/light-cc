@@ -157,13 +157,8 @@
     dragCounter--;
     if (dragCounter <= 0) { dragCounter = 0; dragOver = false; }
   }
-  async function onDrop(e) {
-    e.preventDefault();
-    dragCounter = 0;
-    dragOver = false;
-    const files = e.dataTransfer?.files;
-    if (!files || files.length === 0) return;
-    for (const file of files) {
+  async function uploadAll(files) {
+    await Promise.all(Array.from(files).map(async (file) => {
       try {
         const data = await uploadFile('', file);
         text += (text ? '\n' : '') + data.path;
@@ -172,7 +167,16 @@
       } catch (err) {
         showToast(`Upload failed: ${file.name}`, 'error');
       }
-    }
+    }));
+  }
+
+  async function onDrop(e) {
+    e.preventDefault();
+    dragCounter = 0;
+    dragOver = false;
+    const files = e.dataTransfer?.files;
+    if (!files || files.length === 0) return;
+    await uploadAll(files);
   }
 
   // Attachment button
@@ -182,16 +186,7 @@
     input.multiple = true;
     input.onchange = async () => {
       if (!input.files || input.files.length === 0) return;
-      for (const file of input.files) {
-        try {
-          const data = await uploadFile('', file);
-          text += (text ? '\n' : '') + data.path;
-          autoResize();
-          showToast(`Uploaded ${file.name}`, 'success');
-        } catch (err) {
-          showToast(`Upload failed: ${file.name}`, 'error');
-        }
-      }
+      await uploadAll(input.files);
     };
     input.click();
   }
@@ -224,7 +219,7 @@
     ondragenter={onDragEnter} ondragover={onDragOver} ondragleave={onDragLeave} ondrop={onDrop} role="group">
     {#if acVisible && acMatches.length > 0}
       <div class="autocomplete-dropdown">
-        {#each acMatches as skill, i (i)}
+        {#each acMatches as skill, i (skill.name)}
           <button
             class="autocomplete-item"
             class:active={i === acIndex}
@@ -299,15 +294,16 @@
 
 <style>
   .input-area {
-    padding: 12px max(32px, calc((100% - var(--content-max-w)) / 2)) 20px;
+    padding: 12px 32px 20px;
     background: var(--bg);
     flex-shrink: 0;
+    min-width: 0;
   }
 
   .input-wrapper {
     max-width: var(--content-max-w);
-    margin-left: 40px;
     width: 100%;
+    margin: 0 auto;
     background: var(--surface);
     border: 1px solid var(--border2);
     border-radius: 12px;

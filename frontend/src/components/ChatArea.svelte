@@ -66,11 +66,21 @@
     </div>
   {:else if !currentConversation() || currentConversation().messages.length === 0}
     <div class="empty-state">
-      <div class="empty-logo">
-        <svg width="28" height="28" viewBox="0 0 32 32" fill="none"><g transform="translate(16,16) scale(1.3) translate(-16,-16)"><path d="M24 4c-3 2-6 5-8 9s-3 8-3.5 11c-.1.8-.2 1.5-.2 2l-.3.5c-.5-.5-1.2-1.5-1.5-3-.4-1.8-.2-4 1-6.5 1.5-3 3-5.5 5-7.5s4-3.5 6-4.5c.5-.2.9-.4 1.2-.5L24 4z" fill="#fff" opacity=".5"/><path d="M24 4c-2 1-4 2.5-6 4.5s-3.5 4.5-5 7.5c-1.2 2.5-1.4 4.7-1 6.5.3 1.5 1 2.5 1.5 3l.3-.5c0-.5.1-1.2.2-2 .5-3 1.5-7 3.5-11s5-7 8-9l.2-.1-.5.1c-.3.1-.7.3-1.2.5z" fill="#fff"/><line x1="12.5" y1="25.5" x2="8" y2="28" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/></g></svg>
+      <div class="empty-mark">
+        <span class="empty-bracket">[</span>
+        <span class="empty-dot"></span>
+        <span class="empty-bracket">]</span>
       </div>
-      <h2>Start a conversation</h2>
-      <p>An AI assistant with tools for code execution, data analysis, and visualization.</p>
+      <h2 class="empty-title">
+        <span class="empty-title-line">A quiet workbench</span>
+        <span class="empty-title-line empty-title-accent">for thinking with tools.</span>
+      </h2>
+      <p class="empty-meta">
+        <span>code</span><span class="empty-sep">/</span>
+        <span>analysis</span><span class="empty-sep">/</span>
+        <span>plots</span><span class="empty-sep">/</span>
+        <span>prose</span>
+      </p>
       {#if appState.suggestions.length > 0}
         <div class="suggestions">
           {#each appState.suggestions as s}
@@ -81,7 +91,8 @@
         </div>
       {:else}
         <button class="empty-cta" onclick={() => document.querySelector('.input-textarea')?.focus()}>
-          Type a message to begin
+          <span class="empty-cta-kbd">↵</span>
+          Begin
         </button>
       {/if}
     </div>
@@ -109,51 +120,112 @@
     align-items: center;
     justify-content: center;
     height: 100%;
-    gap: 16px;
+    gap: 22px;
     padding: 40px;
     text-align: center;
-    animation: empty-fade-in 0.4s ease;
-  }
-  @keyframes empty-fade-in {
-    from { opacity: 0; }
-    to { opacity: 1; }
   }
 
-  .empty-logo {
-    width: 40px; height: 40px;
-    background: var(--fg-bright);
-    border-radius: 10px;
-    display: flex; align-items: center; justify-content: center;
-  }
-
-  .empty-state h2 {
-    font-size: 20px;
-    color: var(--fg-bright);
-    font-weight: 600;
-    letter-spacing: -0.02em;
-    font-family: var(--font-prose);
-  }
-  .empty-state p {
-    font-size: 14px;
+  .empty-mark {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    font-family: var(--font-mono);
+    font-size: 24px;
     color: var(--muted);
-    max-width: 340px;
-    line-height: 1.6;
-    font-family: var(--font-ui);
+    animation: empty-mark-in 0.6s cubic-bezier(0.22, 1, 0.36, 1) both;
   }
-  .empty-cta {
-    background: var(--surface2);
-    border: 1px solid var(--border2);
-    border-radius: 8px;
+  .empty-bracket {
+    line-height: 1;
+    font-weight: 300;
+  }
+  .empty-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 16px var(--accent-glow);
+    animation: empty-dot-pulse 2.4s ease-in-out infinite;
+  }
+  @keyframes empty-mark-in {
+    from { opacity: 0; transform: translateY(6px); letter-spacing: 0.3em; }
+    to { opacity: 1; transform: translateY(0); letter-spacing: 0; }
+  }
+  @keyframes empty-dot-pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.55; transform: scale(0.85); }
+  }
+
+  .empty-title {
+    font-family: var(--font-prose);
+    font-size: 32px;
+    line-height: 1.15;
+    letter-spacing: -0.02em;
+    color: var(--fg-bright);
+    font-weight: 400;
+    max-width: 520px;
+    animation: empty-line-in 0.7s cubic-bezier(0.22, 1, 0.36, 1) 0.1s both;
+  }
+  .empty-title-line {
+    display: block;
+  }
+  .empty-title-accent {
+    font-style: italic;
     color: var(--fg-dim);
-    padding: 10px 24px;
-    font-family: var(--font-ui);
-    font-size: 14px;
+    animation: empty-line-in 0.7s cubic-bezier(0.22, 1, 0.36, 1) 0.22s both;
+  }
+  @keyframes empty-line-in {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .empty-meta {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--muted);
+    display: inline-flex;
+    gap: 8px;
+    animation: empty-line-in 0.7s cubic-bezier(0.22, 1, 0.36, 1) 0.34s both;
+  }
+  .empty-sep {
+    color: var(--border2);
+  }
+
+  .empty-cta {
+    background: transparent;
+    border: 1px solid var(--border2);
+    border-radius: 999px;
+    color: var(--fg-dim);
+    padding: 9px 22px 9px 14px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
     cursor: pointer;
-    transition: background 0.15s ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    transition: border-color 0.18s ease, color 0.18s ease, background 0.18s ease;
+    animation: empty-line-in 0.7s cubic-bezier(0.22, 1, 0.36, 1) 0.46s both;
   }
   .empty-cta:hover {
-    background: var(--border);
+    border-color: var(--accent);
     color: var(--fg-bright);
+    background: var(--accent-glow);
+  }
+  .empty-cta-kbd {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border: 1px solid var(--border2);
+    border-radius: 6px;
+    background: var(--surface2);
+    font-size: 12px;
+    color: var(--accent-soft);
+    letter-spacing: 0;
   }
 
   .suggestions {

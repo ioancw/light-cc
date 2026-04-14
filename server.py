@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import fastapi
@@ -80,10 +81,16 @@ area, pie, heatmap, violin, treemap, sunburst, funnel, waterfall, radar, sankey,
 (e.g. `fig.write_json(path)`) or *.png for static. Interactive is preferred.
 - For D3.js or custom HTML visualizations, use `from tools.d3_theme import wrap_d3` to wrap D3 \
 scripts in themed HTML, save as *.html, and print the path. The UI renders HTML files in sandboxed \
-iframes inline. The wrap_d3() function provides: d3 v7, `colors` array, `width`/`height` vars, \
-and CSS matching the dark UI theme.
-- The UI is dark-themed. For python_exec charts use `from tools.chart_theme import apply_theme; \
-apply_theme(fig)` or at minimum template='plotly_dark'. For matplotlib: plt.style.use('dark_background').
+iframes inline.
+- Chart style rules (apply to ALL plots, Plotly / matplotlib / seaborn / D3):
+  1. One chart = one idea. If you need to compare two things, one figure with two traces beats \
+two subplots. Use a subplot only if axes genuinely differ; cap subplots at 2.
+  2. Do not build infographics. No text callout boxes, equations, multi-line commentary, or \
+"key insight" labels inside the figure. Put that content in your chat message instead.
+  3. Keep annotations minimal — at most 2 short labels, each under 10 words.
+  4. Do not set `template` on Plotly figures and do not use `plt.style.use(...)` on matplotlib. \
+The UI applies its own theme and strips any template you set.
+  5. Short title, axis labels, legend. That is usually all.
 - The UI auto-renders images, Plotly charts, HTML files, and CSV files from tool output — \
 print file paths to stdout and they'll render inline. Don't re-read or re-display files you just created.
 - Always save output files to the output directory above. Never use /tmp/ or guess user directories.
@@ -141,6 +148,7 @@ def _build_system_prompt(
     project_config: str | None = None,
     rules_text: str | None = None,
     outputs_dir: str | None = None,
+    available_agents: list[tuple[str, str]] | None = None,
 ) -> str:
     base = BASE_SYSTEM_PROMPT
     if outputs_dir:
@@ -183,31 +191,32 @@ def _build_system_prompt(
             cmd_lines.append(f"- /{c.name}{hint}: {c.description}")
         parts.append(f"\n## Available Commands\n" + "\n".join(cmd_lines))
 
+    if available_agents:
+        agent_lines = [f"- **{name}** -- {desc}" for name, desc in available_agents]
+        parts.append(
+            "\n## Available Agents\n"
+            "The user has configured the specialist agents below. When an "
+            "incoming request matches one of their descriptions, you MUST "
+            "delegate to that agent via the `Agent` tool rather than perform "
+            "the task inline with raw tools like WebSearch, WebFetch, Read, "
+            "or Write. The user set these agents up precisely so you would "
+            "route to them -- bypassing them produces inconsistent, "
+            "unstructured output.\n\n"
+            "To delegate: call `Agent(agent_type=\"<agent-name>\", "
+            "prompt=\"<task details>\")`. Pass the full user request, plus "
+            "any context you have, as `prompt`. Do not paraphrase or "
+            "summarize the task before handing off.\n\n"
+            "Only handle a request inline if NO listed agent fits. When in "
+            "doubt between two agents, pick the more specific one.\n\n"
+            "Agents available to this user:\n" + "\n".join(agent_lines)
+        )
+
     return "\n".join(parts)
 
 
-# ─── FastAPI app ───
-app = FastAPI(title="Light CC")
-app.include_router(auth_router)
-app.include_router(conversations_router)
-app.include_router(admin_router)
-app.include_router(files_router)
-app.include_router(usage_router)
-app.include_router(schedules_router)
-app.include_router(agents_router)
-app.include_router(memory_router)
-app.mount("/static", StaticFiles(directory=str(_PROJECT_ROOT / "static")), name="static")
-
-_SVELTE_DIST = _PROJECT_ROOT / "frontend" / "dist"
-if settings.server.frontend == "svelte":
-    if _SVELTE_DIST.exists() and (_SVELTE_DIST / "assets").exists():
-        app.mount("/assets", StaticFiles(directory=str(_SVELTE_DIST / "assets")), name="svelte-assets")
-    else:
-        logger.warning("frontend=svelte but frontend/dist/ not found — run 'npm run build' in frontend/")
-
-
-@app.on_event("startup")
-async def startup():
+# ─── FastAPI lifespan (startup + shutdown) ───
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     setup_logging()
     setup_telemetry()
 
@@ -323,9 +332,9 @@ async def startup():
     from core.sandbox_exec import check_sandbox_warnings
     check_sandbox_warnings()
 
+    yield
 
-@app.on_event("shutdown")
-async def shutdown():
+    # ── shutdown ──
     from core.session import stop_session_flush
     await stop_session_flush()
 
@@ -340,6 +349,26 @@ async def shutdown():
     await shutdown_job_queue()
     await shutdown_redis()
     await shutdown_db()
+
+
+# ─── FastAPI app ───
+app = FastAPI(title="Light CC", lifespan=lifespan)
+app.include_router(auth_router)
+app.include_router(conversations_router)
+app.include_router(admin_router)
+app.include_router(files_router)
+app.include_router(usage_router)
+app.include_router(schedules_router)
+app.include_router(agents_router)
+app.include_router(memory_router)
+app.mount("/static", StaticFiles(directory=str(_PROJECT_ROOT / "static")), name="static")
+
+_SVELTE_DIST = _PROJECT_ROOT / "frontend" / "dist"
+if settings.server.frontend == "svelte":
+    if _SVELTE_DIST.exists() and (_SVELTE_DIST / "assets").exists():
+        app.mount("/assets", StaticFiles(directory=str(_SVELTE_DIST / "assets")), name="svelte-assets")
+    else:
+        logger.warning("frontend=svelte but frontend/dist/ not found — run 'npm run build' in frontend/")
 
 
 @app.get("/health")

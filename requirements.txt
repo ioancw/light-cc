@@ -11,7 +11,7 @@ plotly
 kaleido
 matplotlib
 httpx
-duckduckgo-search
+ddgs
 sqlalchemy[asyncio]>=2.0
 aiosqlite>=0.19
 python-jose[cryptography]>=3.3

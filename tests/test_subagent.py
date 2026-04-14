@@ -226,3 +226,94 @@ class TestAgentStatus:
         result_json = await handle_agent_status({})
         result = json.loads(result_json)
         assert "agents" in result or "error" not in result
+
+
+# ── Unified registry: user AgentDefinitions callable by name ───────────
+
+class TestUnifiedAgentRegistry:
+    @pytest.mark.asyncio
+    async def test_resolves_user_agent_by_name(
+        self, mock_anthropic_client, _clean_subagent_state, test_db, test_user,
+    ):
+        """A user-created AgentDefinition should be invocable via the Agent tool by name."""
+        from core.agent_crud import create_agent
+        from core.session import create_connection, set_current_session, destroy_connection
+        from tools.subagent import handle_agent
+
+        async def _get_db():
+            return test_db
+
+        with patch("core.agent_crud.get_db", side_effect=_get_db), \
+             patch("core.database.get_db", side_effect=_get_db):
+            await create_agent(
+                user_id=test_user.id,
+                name="my-custom-analyst",
+                description="A custom analyst",
+                system_prompt="You are a custom analyst. Answer concisely.",
+                tools=["Read"],
+                max_turns=3,
+            )
+
+            _, set_responses = mock_anthropic_client
+            set_responses([_build_text_events("analyst output")])
+
+            create_connection("test-session", user_id=test_user.id)
+            set_current_session("test-session")
+            try:
+                result_json = await handle_agent({
+                    "prompt": "Summarize X",
+                    "agent_type": "my-custom-analyst",
+                })
+            finally:
+                destroy_connection("test-session")
+
+        result = json.loads(result_json)
+        assert "error" not in result, result
+        assert "analyst output" in result.get("result", "")
+
+    @pytest.mark.asyncio
+    async def test_unknown_agent_reports_error(self, _clean_subagent_state):
+        """An unknown agent name (no builtin, no user def) should return a clear error."""
+        from tools.subagent import handle_agent
+
+        result_json = await handle_agent({
+            "prompt": "do something",
+            "agent_type": "does-not-exist-xyz",
+        })
+        result = json.loads(result_json)
+        assert "error" in result
+        assert "does-not-exist-xyz" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_user_agent_shadows_builtin(
+        self, mock_anthropic_client, _clean_subagent_state, test_db, test_user,
+    ):
+        """A user agent named after a builtin should shadow the builtin's system prompt."""
+        from core.agent_crud import create_agent
+        from core.session import create_connection, set_current_session, destroy_connection
+        from tools.subagent import _resolve_agent_type
+
+        async def _get_db():
+            return test_db
+
+        with patch("core.agent_crud.get_db", side_effect=_get_db), \
+             patch("core.database.get_db", side_effect=_get_db):
+            await create_agent(
+                user_id=test_user.id,
+                name="researcher",
+                description="my version",
+                system_prompt="CUSTOM RESEARCHER PROMPT",
+                tools=["Read"],
+                max_turns=7,
+            )
+
+            create_connection("test-session-shadow", user_id=test_user.id)
+            set_current_session("test-session-shadow")
+            try:
+                resolved = await _resolve_agent_type("researcher")
+            finally:
+                destroy_connection("test-session-shadow")
+
+        assert resolved is not None
+        assert resolved.system_prompt == "CUSTOM RESEARCHER PROMPT"
+        assert resolved.max_turns == 7

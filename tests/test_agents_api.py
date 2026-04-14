@@ -305,6 +305,24 @@ class TestRuns:
         assert data[0]["status"] == "completed"
 
     @pytest.mark.asyncio
+    async def test_list_runs_honours_limit_param(self, api_client):
+        """AgentPanel calls listAgentRuns(id, 20) — make sure the query param binds."""
+        client, db, user = api_client
+        agent = await create_agent(
+            user_id=user.id, name="rlimit", description="d", system_prompt="p",
+        )
+        for _ in range(5):
+            db.add(AgentRun(
+                agent_id=agent.id, user_id=user.id,
+                status="completed", trigger_type="manual",
+            ))
+        await db.commit()
+
+        resp = await client.get(f"/api/agents/{agent.id}/runs?limit=2")
+        assert resp.status_code == 200
+        assert len(resp.json()) == 2
+
+    @pytest.mark.asyncio
     async def test_list_runs_for_missing_agent_returns_404(self, api_client):
         client, _, _ = api_client
         resp = await client.get("/api/agents/nope/runs")

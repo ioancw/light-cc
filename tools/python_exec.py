@@ -83,7 +83,12 @@ register_tool(
         "The env var OUTPUT_DIR points to a writable directory for saving output files — "
         "use `import os; out = os.environ['OUTPUT_DIR']` to get the path. "
         "Print output file paths to stdout for auto-rendering of images and charts in the UI. "
-        "For charts: save as *.plotly.json for interactive rendering, *.png for static."
+        "For charts: save as *.plotly.json for interactive rendering, *.png for static. "
+        "Chart style: one chart = one idea. Prefer a single plot over multi-subplot figures; "
+        "if you truly need subplots, cap at 2. Do not embed long text annotations, callout "
+        "boxes, chemical equations, or commentary inside the figure — put that content in the "
+        "chat message instead. Keep titles short, avoid overlapping labels, and do not set "
+        "a `template` (the UI applies its own theme)."
     ),
     input_schema={
         "type": "object",

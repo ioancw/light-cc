@@ -19,6 +19,10 @@
   let memoryPanelRef = $state(null);
   let settingsOpen = $state(false);
 
+  // Custom model dropdown
+  let modelDropdownOpen = $state(false);
+  let modelDropdownEl = $state(null);
+
   onMount(() => {
     newConversation();
     connect();
@@ -73,10 +77,6 @@
     }
     modelDropdownOpen = false;
   }
-
-  // Custom model dropdown
-  let modelDropdownOpen = $state(false);
-  let modelDropdownEl = $state(null);
 
   function toggleModelDropdown() {
     modelDropdownOpen = !modelDropdownOpen;
@@ -177,11 +177,13 @@
 <style>
   .app {
     display: grid;
-    grid-template-columns: var(--sidebar-w) 1fr;
+    grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
+    grid-template-rows: 100vh;
     height: 100vh;
+    overflow: hidden;
   }
   .app.sidebar-hidden {
-    grid-template-columns: 0 1fr;
+    grid-template-columns: 0 minmax(0, 1fr);
   }
   .app.sidebar-hidden .topbar {
     padding-left: 48px;
@@ -191,6 +193,7 @@
     display: flex;
     flex-direction: column;
     height: 100vh;
+    min-width: 0;
     overflow: hidden;
     background: var(--bg);
     position: relative;
@@ -200,11 +203,15 @@
     padding: 0 24px;
     height: 48px;
     border-bottom: 1px solid var(--border);
-    display: flex; align-items: center; gap: 16px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    align-items: center;
+    gap: 16px;
     flex-shrink: 0;
     background: var(--bg);
     position: relative;
     z-index: 10;
+    min-width: 0;
   }
 
   .topbar-title {
@@ -215,11 +222,11 @@
     white-space: nowrap;
     font-family: var(--font-ui);
     font-size: 14px;
+    min-width: 0;
   }
 
   .topbar-status {
-    margin-left: auto;
-    flex-shrink: 0;
+    min-width: 0;
   }
 
   .topbar-actions {
@@ -321,6 +328,11 @@
     color: var(--accent-soft);
   }
 
+  @media (max-width: 900px) {
+    .topbar-actions { gap: 4px; }
+    .topbar-btn { width: 26px; height: 26px; }
+  }
+
   @media (max-width: 768px) {
     .app, .app.sidebar-hidden {
       grid-template-columns: 1fr;
@@ -328,11 +340,15 @@
     .topbar {
       padding: 0 12px;
       height: 44px;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
     }
+    .topbar-status { display: none; }
     .topbar-title {
-      max-width: 120px;
+      min-width: 0;
     }
-    .topbar-actions { gap: 4px; }
+    .topbar-actions { gap: 2px; }
+    .topbar-btn { width: 28px; height: 28px; }
     .model-trigger { font-size: 10px; padding: 4px 8px; }
     .model-menu { min-width: 140px; }
   }

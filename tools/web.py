@@ -110,7 +110,10 @@ async def handle_web_search(tool_input: dict[str, Any]) -> str:
     max_results = tool_input.get("max_results", 5)
 
     try:
-        from duckduckgo_search import DDGS
+        try:
+            from ddgs import DDGS  # renamed from duckduckgo-search
+        except ImportError:
+            from duckduckgo_search import DDGS  # legacy fallback
 
         with DDGS() as ddgs:
             results = list(ddgs.text(query, max_results=max_results))
@@ -125,7 +128,7 @@ async def handle_web_search(tool_input: dict[str, Any]) -> str:
         ]
         return json.dumps({"results": formatted, "count": len(formatted)})
     except ImportError:
-        return json.dumps({"error": "duckduckgo-search package not installed. Run: pip install duckduckgo-search"})
+        return json.dumps({"error": "ddgs package not installed. Run: pip install ddgs"})
     except Exception as e:
         return json.dumps({"error": str(e)})
 

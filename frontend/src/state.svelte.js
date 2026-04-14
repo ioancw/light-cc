@@ -1,6 +1,8 @@
 // Global reactive state using Svelte 5 runes.
 // Import this module in any component that needs shared state.
 
+import { SvelteSet } from 'svelte/reactivity';
+
 export const appState = $state({
   // Auth
   authToken: localStorage.getItem('lcc_access_token') || null,
@@ -45,7 +47,7 @@ export const appState = $state({
   inlineStatus: null, // { message, type } or null
 
   // Loading conversations (set of cids currently being loaded from server)
-  loadingConversations: new Set(),
+  loadingConversations: new SvelteSet(),
 
   // Scroll state (shared between ChatArea and InputBar)
   needsScrollDown: false,

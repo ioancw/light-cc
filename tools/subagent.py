@@ -15,7 +15,7 @@ from typing import Any, Awaitable, Callable
 
 from tools.registry import register_tool, get_all_tool_schemas, get_tool_schemas
 from core.permissions import is_blocked, is_risky
-from core.agent_types import get_agent_type, EXCLUDED_TOOLS, list_agent_types
+from core.agent_types import AgentType, get_agent_type, EXCLUDED_TOOLS, list_agent_types
 
 logger = logging.getLogger(__name__)
 
@@ -85,18 +85,65 @@ async def _subagent_permission_check(name: str, tool_input: dict[str, Any]) -> b
     return True
 
 
+# ── Name resolution ──
+
+async def _resolve_agent_type(name: str) -> AgentType | None:
+    """Resolve an agent name against the unified registry.
+
+    Lookup order: user-owned AgentDefinition (scoped by session user_id), then
+    builtin AgentType. User agents shadow builtins of the same name so users
+    can override behavior without editing source.
+    """
+    try:
+        from core.session import current_session_get
+        user_id = current_session_get("user_id")
+    except Exception:
+        user_id = None
+
+    if user_id:
+        try:
+            from sqlalchemy import select
+            from core.database import get_db
+            from core.db_models import AgentDefinition
+
+            db = await get_db()
+            try:
+                res = await db.execute(
+                    select(AgentDefinition).where(
+                        AgentDefinition.user_id == user_id,
+                        AgentDefinition.name == name,
+                        AgentDefinition.enabled.is_(True),
+                    )
+                )
+                a = res.scalar_one_or_none()
+                if a is not None:
+                    return AgentType(
+                        name=a.name,
+                        system_prompt=a.system_prompt,
+                        tool_names=a.tools_list or [],
+                        model=a.model,
+                        max_turns=a.max_turns or 20,
+                        timeout_seconds=a.timeout_seconds or 300,
+                    )
+            finally:
+                await db.close()
+        except Exception as e:
+            logger.warning(f"Failed to resolve user agent '{name}': {e}")
+
+    return get_agent_type(name)
+
+
 # ── Tool resolution ──
 
-def _get_tools_for_type(agent_type_name: str, tool_names: list[str] | None = None) -> list[dict[str, Any]]:
-    """Get tool schemas for a given agent type, excluding Agent tools."""
+def _get_tools_for_type(at: AgentType | None, tool_names: list[str] | None = None) -> list[dict[str, Any]]:
+    """Get tool schemas for a resolved agent type, excluding Agent tools."""
     if tool_names:
         # Explicit tool list (e.g. from skill context=fork)
         filtered = [n for n in tool_names if n not in EXCLUDED_TOOLS]
         return get_tool_schemas(filtered)
 
-    agent_type = get_agent_type(agent_type_name)
-    if agent_type and agent_type.tool_names:
-        return get_tool_schemas(agent_type.tool_names)
+    if at and at.tool_names:
+        return get_tool_schemas(at.tool_names)
 
     # Default: all tools minus Agent tools
     all_tools = get_all_tool_schemas()
@@ -132,7 +179,7 @@ async def run_subagent(
     """
     from core import agent
 
-    at = get_agent_type(agent_type)
+    at = await _resolve_agent_type(agent_type)
 
     if system is None:
         system = at.system_prompt if at else "Complete the task and return a clear, concise result."
@@ -152,7 +199,7 @@ async def run_subagent(
     else:
         messages = [{"role": "user", "content": prompt}]
 
-    tools = _get_tools_for_type(agent_type, tool_names)
+    tools = _get_tools_for_type(at, tool_names)
 
     output_parts: list[str] = []
 
@@ -231,9 +278,17 @@ async def handle_agent(tool_input: dict[str, Any]) -> str:
     run_in_background = tool_input.get("run_in_background", False)
     description = tool_input.get("description", "")
 
-    # Validate agent type
-    if not agent_id and agent_type not in [at.name for at in list_agent_types()]:
-        return json.dumps({"error": f"Unknown agent type: {agent_type}. Available: {[at.name for at in list_agent_types()]}"})
+    # Validate agent name against unified registry (user agents + builtin types).
+    if not agent_id:
+        resolved = await _resolve_agent_type(agent_type)
+        if resolved is None:
+            builtins = [at.name for at in list_agent_types()]
+            return json.dumps({
+                "error": (
+                    f"Unknown agent: '{agent_type}'. Checked your custom agents and "
+                    f"builtins ({builtins})."
+                )
+            })
 
     _cleanup_agents()
 
@@ -341,8 +396,6 @@ async def handle_agent_status(tool_input: dict[str, Any]) -> str:
 
 # ── Register tools ──
 
-_type_names = [at.name for at in list_agent_types()]
-
 register_tool(
     name="Agent",
     aliases=["subagent", "BackgroundAgent", "background_agent"],
@@ -350,9 +403,11 @@ register_tool(
         "Spawn a sub-agent to handle a complex task independently in a separate context. "
         "Use for: parallelizing independent work, isolating large tasks from the main conversation, "
         "or delegating specialized work (research, code exploration, planning). "
-        "Typed agents have focused tool sets and system prompts: "
+        "Pass `agent_type` to select a specialist. Builtin types: "
         "explorer (file discovery), planner (architecture), coder (implementation), "
         "researcher (web search + analysis), default (all tools). "
+        "You can also pass the name of any custom agent you have defined -- those "
+        "take precedence over builtins with the same name. "
         "Use run_in_background=true to continue working while the agent runs. "
         "Resume a previous agent by passing its agent_id."
     ),
@@ -365,8 +420,11 @@ register_tool(
             },
             "agent_type": {
                 "type": "string",
-                "enum": _type_names,
-                "description": "Type of agent to spawn (default: 'default')",
+                "description": (
+                    "Name of the agent to spawn -- either a builtin type "
+                    "(explorer/planner/coder/researcher/default) or one of your "
+                    "custom agents. Default: 'default'."
+                ),
             },
             "agent_id": {
                 "type": "string",

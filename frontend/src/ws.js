@@ -53,7 +53,7 @@ export function connect() {
     }, reconnectDelay);
   };
 
-  ws.onerror = () => ws.close();
+  ws.onerror = () => { /* onclose will fire and handle reconnect */ };
 }
 
 export function disconnect() {
@@ -164,6 +164,7 @@ function handleEvent(type, data, cid = null) {
           id: data.tool_id,
           name: data.name,
           input: data.input,
+          description: data.description || '',
           result: null,
           status: 'running',
           startTime: Date.now(),

@@ -298,6 +298,45 @@ class TestCronAgentBranch:
         trigger_mock.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_scheduler_creates_agent_run_row(self, scheduler_db):
+        """End-to-end: scheduler → trigger_agent_run (unmocked) inserts a
+        real AgentRun row in 'running' state and enqueues the job."""
+        from core.agent_crud import create_agent
+        from core.db_models import AgentDefinition, AgentRun
+        from sqlalchemy import update as sa_update
+
+        db, user = scheduler_db
+        agent = await create_agent(
+            user_id=user.id, name="cron-e2e", description="d", system_prompt="p",
+            trigger="cron", cron_expression="0 * * * *",
+        )
+        past = datetime.now(timezone.utc) - timedelta(minutes=5)
+        await db.execute(
+            sa_update(AgentDefinition)
+            .where(AgentDefinition.id == agent.id)
+            .values(next_run_at=past)
+        )
+        await db.commit()
+
+        enqueue_mock = AsyncMock()
+        with patch("core.agent_runner.enqueue", new=enqueue_mock):
+            await _run_one_iteration()
+
+        # A real AgentRun row should exist now.
+        runs = (await db.execute(
+            select(AgentRun).where(AgentRun.agent_id == agent.id),
+        )).scalars().all()
+        assert len(runs) == 1
+        assert runs[0].status == "running"
+        assert runs[0].trigger_type == "cron"
+
+        # And the executor job was enqueued with the right run_id.
+        enqueue_mock.assert_awaited_once()
+        kw = enqueue_mock.await_args.kwargs
+        assert kw["agent_id"] == agent.id
+        assert kw["run_id"] == runs[0].id
+
+    @pytest.mark.asyncio
     async def test_manual_agent_is_skipped(self, scheduler_db):
         """Manual agents must not be picked up by the cron branch."""
         from core.agent_crud import create_agent

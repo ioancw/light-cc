@@ -172,6 +172,10 @@ async def extract_memories_from_conversation(
             )
         )).scalar_one_or_none()
         if conv is None:
+            logger.debug(
+                f"auto-extract: conversation {conversation_id} no longer exists "
+                f"(likely deleted before the job ran); skipping."
+            )
             return 0
 
         msg_rows = list((await db.execute(

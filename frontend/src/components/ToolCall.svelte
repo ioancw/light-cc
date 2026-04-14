@@ -114,6 +114,27 @@
   function copyText(text) {
     navigator.clipboard.writeText(text);
   }
+
+  let paramRows = $derived.by(() => {
+    const inp = tc.input;
+    if (!inp || typeof inp !== 'object') return [];
+    return Object.entries(inp).map(([k, v]) => {
+      let display;
+      if (v === null || v === undefined) display = '';
+      else if (typeof v === 'string') display = v;
+      else {
+        try { display = JSON.stringify(v); }
+        catch { display = String(v); }
+      }
+      return [k, display];
+    });
+  });
+
+  let shortDescription = $derived.by(() => {
+    if (!tc.description) return '';
+    const firstSentence = tc.description.split(/(?<=\.)\s/)[0] || tc.description;
+    return truncate(firstSentence, 240);
+  });
 </script>
 
 <div class="tool-block" class:expanded role="region" aria-label="{tc.name} tool call">
@@ -129,10 +150,33 @@
     {#if tc.duration}
       <span class="tool-duration">{tc.duration}s</span>
     {/if}
-    <span class="tool-chevron">&#9660;</span>
+    <svg class="tool-chevron" width="8" height="8" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+      <path d="M2 4l3 3 3-3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
   </button>
 
   <div class="tool-body">
+    {#if shortDescription}
+      <div class="tool-section">
+        <div class="tool-section-label"><span>Description</span></div>
+        <div class="tool-description">{shortDescription}</div>
+      </div>
+    {/if}
+
+    {#if paramRows.length > 0}
+      <div class="tool-section">
+        <div class="tool-section-label"><span>Params</span></div>
+        <div class="tool-params">
+          {#each paramRows as [key, value]}
+            <div class="tool-param-row">
+              <span class="tool-param-key">{key}</span>
+              <span class="tool-param-value">{value}</span>
+            </div>
+          {/each}
+        </div>
+      </div>
+    {/if}
+
     {#if streamText && tc.status === 'running'}
       <div class="tool-section">
         <div class="tool-section-label"><span>Live Output</span></div>
@@ -349,10 +393,10 @@
   }
 
   .tool-chevron {
-    font-size: 10px;
     color: var(--muted);
     transition: transform 0.2s;
     margin-left: 2px;
+    flex-shrink: 0;
   }
   .tool-block.expanded .tool-chevron { transform: rotate(180deg); }
 
@@ -579,6 +623,40 @@
     content: '+ ';
     font-weight: 700;
     opacity: 0.6;
+  }
+
+  /* Tool description (pulled from registry) */
+  .tool-description {
+    font-size: 12px;
+    line-height: 1.55;
+    color: var(--fg-dim);
+    font-family: var(--font-ui);
+  }
+
+  /* Generic params key/value rows */
+  .tool-params {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .tool-param-row {
+    display: grid;
+    grid-template-columns: minmax(90px, auto) 1fr;
+    gap: 12px;
+    font-size: 11px;
+    line-height: 1.5;
+    padding: 2px 0;
+    border-bottom: 1px solid color-mix(in srgb, var(--border) 40%, transparent);
+  }
+  .tool-param-row:last-child { border-bottom: none; }
+  .tool-param-key {
+    color: var(--muted);
+    font-weight: 500;
+  }
+  .tool-param-value {
+    color: var(--fg-dim);
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }
 
   /* Shared: metadata line */

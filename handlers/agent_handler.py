@@ -104,6 +104,36 @@ async def summarize_messages(messages: list[dict[str, Any]]) -> str:
     return resp.content[0].text.strip()
 
 
+async def _list_user_agents(user_id: str) -> list[tuple[str, str]]:
+    """Return (name, description) for this user's enabled AgentDefinitions.
+
+    Surfaced in the system prompt so the model knows which specialists it can
+    delegate to via the `Agent` tool. Returns [] on any failure -- a missing
+    agents list should never break the chat path.
+    """
+    if not user_id or user_id == "default":
+        return []
+    try:
+        from sqlalchemy import select
+        from core.database import get_db
+        from core.db_models import AgentDefinition
+
+        db = await get_db()
+        try:
+            res = await db.execute(
+                select(AgentDefinition.name, AgentDefinition.description).where(
+                    AgentDefinition.user_id == user_id,
+                    AgentDefinition.enabled.is_(True),
+                )
+            )
+            return [(n, d) for n, d in res.all()]
+        finally:
+            await db.close()
+    except Exception as e:
+        logger.debug(f"_list_user_agents failed for {user_id}: {e}")
+        return []
+
+
 async def handle_user_message(
     session_id: str,
     cid: str,
@@ -314,6 +344,8 @@ async def handle_user_message(
     if active_prompt:
         active_prompt = await resolve_dynamic_content(active_prompt)
 
+    available_agents = await _list_user_agents(user_id)
+
     system = build_system_prompt(
         active_prompt,
         memory_context or None,
@@ -321,6 +353,7 @@ async def handle_user_message(
         project_config or None,
         rules_text or None,
         outputs_dir=str(user_outputs_dir),
+        available_agents=available_agents,
     )
 
     # ── Agent callbacks ──
@@ -328,11 +361,13 @@ async def handle_user_message(
         await send_event("text_delta", {"text": text})
 
     async def on_tool_start(name: str, tool_input: dict[str, Any]) -> str:
+        from tools.registry import get_tool_description
         tool_id = f"tool_{uuid.uuid4().hex[:8]}"
         await send_event("tool_start", {
             "tool_id": tool_id,
             "name": name,
             "input": tool_input,
+            "description": get_tool_description(name),
         })
         return tool_id
 
