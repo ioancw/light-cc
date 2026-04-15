@@ -73,7 +73,7 @@ a:hover { text-decoration: underline; }
 /* Prose styles (for markdown-rendered content) */
 .msg-prose {
   font-family: var(--font-prose);
-  font-size: 16px;
+  font-size: 17px;
   line-height: 1.7;
   color: var(--fg);
   word-break: break-word;

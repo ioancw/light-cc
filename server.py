@@ -35,6 +35,7 @@ from routes.usage import router as usage_router
 from routes.schedules import router as schedules_router
 from routes.agents import router as agents_router
 from routes.memory import router as memory_router
+from routes.plugins import router as plugins_router
 
 import tools  # noqa: F401 — triggers tool registration
 
@@ -361,6 +362,7 @@ app.include_router(usage_router)
 app.include_router(schedules_router)
 app.include_router(agents_router)
 app.include_router(memory_router)
+app.include_router(plugins_router)
 app.mount("/static", StaticFiles(directory=str(_PROJECT_ROOT / "static")), name="static")
 
 _SVELTE_DIST = _PROJECT_ROOT / "frontend" / "dist"
