@@ -128,7 +128,8 @@ async def register(req: RegisterRequest):
     # example agents in AgentPanel on first login. Best-effort.
     try:
         from pathlib import Path
-        from core.agent_loader import sync_agents_to_db
+        from core.agent_loader import discover_agents, sync_agent_defs_to_db, sync_agents_to_db
+        from core.plugin_loader import get_plugin_loader
 
         _project_root = Path(__file__).resolve().parent.parent
         for agents_dir in settings.paths.agents_dirs:
@@ -137,6 +138,19 @@ async def register(req: RegisterRequest):
                 resolved = _project_root / resolved
             if resolved.exists():
                 await sync_agents_to_db(resolved, user.id)
+
+        # Also seed plugin-owned agents for the new user.
+        for plugin_info in get_plugin_loader().list_plugins():
+            plugin_agents_dir = plugin_info.path / "agents"
+            if not plugin_agents_dir.exists():
+                continue
+            defs = discover_agents(plugin_agents_dir)
+            for d in defs:
+                d.name = f"{plugin_info.name}:{d.name}"
+            if defs:
+                await sync_agent_defs_to_db(
+                    defs, user.id, source_label=f"plugin:{plugin_info.name}"
+                )
     except Exception:
         pass
 

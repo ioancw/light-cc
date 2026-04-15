@@ -101,14 +101,99 @@ async def handle_web_fetch(tool_input: dict[str, Any]) -> str:
         return json.dumps({"error": str(e)})
 
 
-async def handle_web_search(tool_input: dict[str, Any]) -> str:
-    """Search the web via DuckDuckGo."""
-    query = tool_input.get("query", "")
-    if not query:
-        return json.dumps({"error": "No query provided"})
+_TAVILY_ENDPOINT = "https://api.tavily.com/search"
+_TAVILY_TOPICS = {"general", "news", "finance"}
+_TAVILY_DEPTHS = {"basic", "advanced"}
 
-    max_results = tool_input.get("max_results", 5)
 
+async def _tavily_search(query: str, tool_input: dict[str, Any], api_key: str) -> str:
+    """Search the web via Tavily. Optimized for LLM consumption."""
+    depth = tool_input.get("search_depth", "basic")
+    if depth not in _TAVILY_DEPTHS:
+        depth = "basic"
+
+    topic = tool_input.get("topic", "general")
+    if topic not in _TAVILY_TOPICS:
+        topic = "general"
+
+    max_results = int(tool_input.get("max_results", 5))
+    include_answer = bool(tool_input.get("include_answer", True))
+
+    payload: dict[str, Any] = {
+        "query": query,
+        "search_depth": depth,
+        "topic": topic,
+        "max_results": max(1, min(max_results, 20)),
+        "include_answer": include_answer,
+    }
+
+    include_domains = tool_input.get("include_domains")
+    if include_domains:
+        payload["include_domains"] = include_domains
+    exclude_domains = tool_input.get("exclude_domains")
+    if exclude_domains:
+        payload["exclude_domains"] = exclude_domains
+
+    try:
+        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+            resp = await client.post(
+                _TAVILY_ENDPOINT,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+    except httpx.TimeoutException:
+        return json.dumps({
+            "error": f"Tavily request timed out after {_HTTP_TIMEOUT}s",
+            "hint": "Try search_depth='basic' or a narrower query.",
+        })
+    except Exception as e:
+        return json.dumps({"error": f"Tavily request failed: {e}"})
+
+    if resp.status_code == 401:
+        return json.dumps({
+            "error": "Tavily API key is invalid or missing.",
+            "hint": "Set TAVILY_API_KEY in .env (get one at https://app.tavily.com).",
+        })
+    if resp.status_code == 429:
+        return json.dumps({
+            "error": "Tavily rate limit exceeded.",
+            "hint": "Wait a few seconds or upgrade your Tavily plan.",
+        })
+    if resp.status_code >= 400:
+        return json.dumps({
+            "error": f"Tavily returned HTTP {resp.status_code}",
+            "body": resp.text[:500],
+        })
+
+    try:
+        data = resp.json()
+    except Exception:
+        return json.dumps({"error": "Tavily returned non-JSON response", "body": resp.text[:500]})
+
+    results = [
+        {
+            "title": r.get("title", ""),
+            "url": r.get("url", ""),
+            "snippet": r.get("content", "")[:500],
+            "score": r.get("score"),
+        }
+        for r in data.get("results", [])
+    ]
+    out: dict[str, Any] = {
+        "provider": "tavily",
+        "results": results,
+        "count": len(results),
+    }
+    if data.get("answer"):
+        out["answer"] = data["answer"]
+    return json.dumps(out)
+
+
+async def _ddg_search(query: str, max_results: int) -> str:
+    """Fallback web search via DuckDuckGo when no Tavily key is configured."""
     try:
         try:
             from ddgs import DDGS  # renamed from duckduckgo-search
@@ -126,11 +211,33 @@ async def handle_web_search(tool_input: dict[str, Any]) -> str:
             }
             for r in results
         ]
-        return json.dumps({"results": formatted, "count": len(formatted)})
+        return json.dumps({
+            "provider": "duckduckgo",
+            "results": formatted,
+            "count": len(formatted),
+        })
     except ImportError:
-        return json.dumps({"error": "ddgs package not installed. Run: pip install ddgs"})
+        return json.dumps({
+            "error": "No search backend available.",
+            "hint": "Set TAVILY_API_KEY in .env, or run: pip install ddgs",
+        })
     except Exception as e:
-        return json.dumps({"error": str(e)})
+        return json.dumps({"error": f"DuckDuckGo search failed: {e}"})
+
+
+async def handle_web_search(tool_input: dict[str, Any]) -> str:
+    """Search the web. Uses Tavily when TAVILY_API_KEY is set, falls back to DuckDuckGo."""
+    query = tool_input.get("query", "")
+    if not query:
+        return json.dumps({"error": "No query provided"})
+
+    from core.config import settings
+    api_key = settings.tavily_api_key
+    if api_key:
+        return await _tavily_search(query, tool_input, api_key)
+
+    max_results = int(tool_input.get("max_results", 5))
+    return await _ddg_search(query, max_results)
 
 
 register_tool(
@@ -174,10 +281,14 @@ register_tool(
     name="WebSearch",
     aliases=["web_search"],
     description=(
-        "Search the web using DuckDuckGo. Returns titles, URLs, and text snippets. "
-        "Use this to find current information, documentation, or answers to factual questions. "
-        "Follow up with WebFetch to read full pages from the results. "
-        "Default returns 5 results."
+        "Search the web and return LLM-ready results. "
+        "Primary backend: Tavily (set TAVILY_API_KEY in .env). Fallback: DuckDuckGo. "
+        "Returns a list of results with title, url, snippet, and (Tavily only) a relevance score. "
+        "When include_answer=true (default), Tavily also returns a direct synthesized answer — "
+        "prefer reading that first, then use the results for citations. "
+        "Use search_depth='advanced' for research-grade queries (slower, richer). "
+        "Follow up with WebFetch to read full pages when snippets aren't enough. "
+        "Use topic='news' for current events and topic='finance' for markets/tickers."
     ),
     input_schema={
         "type": "object",
@@ -188,7 +299,31 @@ register_tool(
             },
             "max_results": {
                 "type": "integer",
-                "description": "Max results to return (default 5). Increase for broader searches.",
+                "description": "Max results to return (default 5, max 20).",
+            },
+            "search_depth": {
+                "type": "string",
+                "enum": ["basic", "advanced"],
+                "description": "Tavily only. 'basic' is fast; 'advanced' does deeper crawling. Default 'basic'.",
+            },
+            "topic": {
+                "type": "string",
+                "enum": ["general", "news", "finance"],
+                "description": "Tavily only. Narrow the index. Default 'general'.",
+            },
+            "include_answer": {
+                "type": "boolean",
+                "description": "Tavily only. Include a synthesized answer string (default true).",
+            },
+            "include_domains": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Tavily only. Whitelist of domains (e.g. ['arxiv.org', 'nature.com']).",
+            },
+            "exclude_domains": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Tavily only. Blacklist of domains.",
             },
         },
         "required": ["query"],

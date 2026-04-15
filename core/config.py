@@ -76,6 +76,7 @@ class Settings(BaseModel):
     s3_bucket: str | None = Field(default_factory=lambda: os.environ.get("S3_BUCKET"))
     s3_region: str = Field(default_factory=lambda: os.environ.get("S3_REGION", "us-east-1"))
     s3_prefix: str = "lightcc/"
+    tavily_api_key: str | None = Field(default_factory=lambda: os.environ.get("TAVILY_API_KEY"))
     providers: list[ProviderConfig] = Field(default_factory=list)
     paths: PathsConfig = Field(default_factory=PathsConfig)
     server: ServerConfig = Field(default_factory=ServerConfig)

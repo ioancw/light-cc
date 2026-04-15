@@ -151,18 +151,25 @@ def discover_agents(agents_dir: str | Path) -> list[AgentDef]:
     return agents
 
 
-async def sync_agents_to_db(agents_dir: str | Path, owner_user_id: str) -> int:
-    """Sync YAML-defined agents to the DB as source='yaml' rows owned by owner_user_id.
+async def sync_agent_defs_to_db(
+    defs: list[AgentDef],
+    owner_user_id: str,
+    *,
+    source_label: str = "yaml",
+) -> int:
+    """Upsert a list of AgentDefs into the DB for a specific owner.
 
     - Upserts by (user_id, name).
-    - Only overwrites rows with source='yaml' (preserves user edits to source='user' rows).
+    - Overwrites rows whose existing source matches source_label (or legacy 'yaml' rows
+      when source_label starts with 'plugin:' — this lets a plugin take ownership of an
+      agent previously installed as a YAML definition).
+    - Skips user-owned rows (source='user') to preserve manual edits.
     - Returns the count of agents synced.
     """
     from sqlalchemy import select
     from core.database import get_db
     from core.db_models import AgentDefinition
 
-    defs = discover_agents(agents_dir)
     if not defs:
         return 0
 
@@ -176,8 +183,10 @@ async def sync_agents_to_db(agents_dir: str | Path, owner_user_id: str) -> int:
             )
             existing = (await session.execute(stmt)).scalar_one_or_none()
 
-            if existing and existing.source != "yaml":
-                logger.info(f"Skipping YAML sync of agent '{d.name}' (user-owned copy exists)")
+            if existing and existing.source == "user":
+                logger.info(
+                    f"Skipping {source_label} sync of agent '{d.name}' (user-owned copy exists)"
+                )
                 continue
 
             tools_json = json.dumps(d.tools) if d.tools is not None else None
@@ -200,7 +209,7 @@ async def sync_agents_to_db(agents_dir: str | Path, owner_user_id: str) -> int:
                     cron_timezone=d.cron_timezone,
                     webhook_url=d.webhook_url,
                     enabled=d.enabled,
-                    source="yaml",
+                    source=source_label,
                 )
                 session.add(row)
             else:
@@ -217,11 +226,20 @@ async def sync_agents_to_db(agents_dir: str | Path, owner_user_id: str) -> int:
                 existing.cron_timezone = d.cron_timezone
                 existing.webhook_url = d.webhook_url
                 existing.enabled = d.enabled
+                existing.source = source_label
             synced += 1
 
         await session.commit()
     finally:
         await session.close()
 
-    logger.info(f"Synced {synced} YAML agent(s) to DB for user {owner_user_id}")
+    logger.info(
+        f"Synced {synced} agent(s) to DB for user {owner_user_id} (source={source_label})"
+    )
     return synced
+
+
+async def sync_agents_to_db(agents_dir: str | Path, owner_user_id: str) -> int:
+    """Sync YAML-defined agents from a directory to the DB as source='yaml'."""
+    defs = discover_agents(agents_dir)
+    return await sync_agent_defs_to_db(defs, owner_user_id, source_label="yaml")

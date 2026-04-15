@@ -9,6 +9,12 @@ Plugin directory structure:
             *.md              # Slash commands (optional)
         skills/
             <name>/SKILL.md   # Skills (optional)
+        agents/
+            <name>/AGENT.md   # Agent definitions (optional)
+
+Agents loaded from plugins are namespaced as `plugin-name:agent-name` and stored
+in the DB with source='plugin:<plugin-name>' so they can be cleanly torn down
+on uninstall.
 """
 
 from __future__ import annotations
@@ -33,6 +39,7 @@ class PluginInfo:
         self.mcp_servers: list[str] = []  # Names of connected MCP servers
         self.commands: list[str] = []  # Names of loaded commands
         self.skills: list[str] = []  # Names of loaded skills
+        self.agents: list[str] = []  # Namespaced names of loaded agents
 
 
 class PluginLoader:
@@ -102,14 +109,70 @@ class PluginLoader:
                 register_skill(skill)
                 info.skills.append(namespaced)
 
+        # 4. Load agents from agents/ directory (namespaced as plugin-name:agent-name)
+        agents_dir = plugin_dir / "agents"
+        if agents_dir.exists():
+            from core.agent_loader import discover_agents
+            defs = discover_agents(agents_dir)
+            for d in defs:
+                namespaced = f"{name}:{d.name}"
+                d.name = namespaced
+                info.agents.append(namespaced)
+            if defs:
+                await self._sync_plugin_agents(name, defs)
+
         self._plugins[name] = info
         logger.info(
             f"Plugin '{name}' v{info.version} loaded: "
             f"{len(info.mcp_servers)} MCP servers, "
             f"{len(info.commands)} commands, "
-            f"{len(info.skills)} skills"
+            f"{len(info.skills)} skills, "
+            f"{len(info.agents)} agents"
         )
         return info
+
+    async def _sync_plugin_agents(self, plugin_name: str, defs: list) -> None:
+        """Upsert plugin-owned agents into the DB for every existing user.
+
+        New users created later pick these up in routes/auth.py signup.
+        """
+        from sqlalchemy import select
+        from core.agent_loader import sync_agent_defs_to_db
+        from core.database import get_db
+        from core.db_models import User
+
+        source_label = f"plugin:{plugin_name}"
+        db = await get_db()
+        try:
+            user_ids = list((await db.execute(select(User.id))).scalars().all())
+        finally:
+            await db.close()
+
+        for uid in user_ids:
+            try:
+                await sync_agent_defs_to_db(defs, uid, source_label=source_label)
+            except Exception as e:
+                logger.warning(
+                    f"Plugin '{plugin_name}': failed to sync agents for user {uid}: {e}"
+                )
+
+    async def _delete_plugin_agents(self, plugin_name: str) -> None:
+        """Remove all DB rows owned by this plugin (source='plugin:<name>')."""
+        from sqlalchemy import delete
+        from core.database import get_db
+        from core.db_models import AgentDefinition
+
+        source_label = f"plugin:{plugin_name}"
+        db = await get_db()
+        try:
+            await db.execute(
+                delete(AgentDefinition).where(AgentDefinition.source == source_label)
+            )
+            await db.commit()
+        except Exception as e:
+            logger.warning(f"Plugin '{plugin_name}': failed to delete agents: {e}")
+        finally:
+            await db.close()
 
     async def load_plugins_from(self, base_dir: Path) -> list[PluginInfo]:
         """Scan base_dir for subdirectories containing .claude-plugin/."""
@@ -155,6 +218,10 @@ class PluginLoader:
             from skills.registry import unregister_skill
             for skill_name in info.skills:
                 unregister_skill(skill_name)
+
+        # Remove plugin agents from DB
+        if info.agents:
+            await self._delete_plugin_agents(name)
 
         logger.info(f"Plugin '{name}' unloaded")
 

@@ -12,6 +12,9 @@ my-plugin/
     skills/
         my-skill/
             SKILL.md          # Optional: skills (auto-namespaced as plugin-name:skill-name)
+    agents/
+        my-agent/
+            AGENT.md          # Optional: agent definitions (auto-namespaced as plugin-name:agent-name)
 ```
 
 ## plugin.json Schema
@@ -54,9 +57,11 @@ my-plugin/
 
 Skills loaded from plugins are automatically namespaced as `plugin-name:skill-name`. This prevents collisions between plugins. Users invoke them as `/plugin-name:skill-name` or by intent matching.
 
-Commands loaded from plugins follow the same namespacing convention.
+Commands and agents loaded from plugins follow the same namespacing convention.
 
-Plugins **cannot** register skills or commands outside their namespace prefix. Attempting to do so will be rejected by the loader.
+Plugin-owned agents are persisted to the `AgentDefinition` table with `source='plugin:<plugin-name>'`. On uninstall, all rows with that source are deleted automatically. User-edited agents (`source='user'`) are never overwritten by a plugin sync.
+
+Plugins **cannot** register skills, commands, or agents outside their namespace prefix. Attempting to do so will be rejected by the loader.
 
 ## Installation
 

@@ -205,6 +205,113 @@ class TestPluginUnload:
         assert len(loader.list_plugins()) == 0
 
 
+class TestPluginAgents:
+    """F4: plugins can ship agent definitions that sync to the DB."""
+
+    @pytest.fixture
+    def plugin_dir_with_agent(self, plugin_dir: Path) -> Path:
+        agents_dir = plugin_dir / "agents" / "my-agent"
+        agents_dir.mkdir(parents=True)
+        (agents_dir / "AGENT.md").write_text(
+            "---\n"
+            "name: my-agent\n"
+            "description: Plugin-shipped agent\n"
+            "---\n"
+            "You are a helpful plugin agent.\n"
+        )
+        return plugin_dir
+
+    @pytest.mark.asyncio
+    async def test_agents_namespaced(self, plugin_dir_with_agent):
+        """Plugin-owned agents should be namespaced plugin-name:agent-name."""
+        loader = PluginLoader()
+
+        with patch.object(loader, "_sync_plugin_agents", AsyncMock()) as mock_sync:
+            info = await loader.load_plugin(plugin_dir_with_agent)
+
+        assert info is not None
+        assert "test-plugin:my-agent" in info.agents
+        # Sync helper should have been called with namespaced defs
+        assert mock_sync.await_count == 1
+        passed_defs = mock_sync.await_args[0][1]
+        assert passed_defs[0].name == "test-plugin:my-agent"
+
+    @pytest.mark.asyncio
+    async def test_agents_persisted_with_plugin_source(
+        self, plugin_dir_with_agent, test_db, test_user,
+    ):
+        """End-to-end: loading a plugin writes an AgentDefinition with source='plugin:<name>'."""
+        from sqlalchemy import select
+        from core.db_models import AgentDefinition
+
+        async def _get_test_db():
+            return test_db
+
+        loader = PluginLoader()
+        with patch("core.database.get_db", side_effect=_get_test_db):
+            info = await loader.load_plugin(plugin_dir_with_agent)
+
+        assert info is not None
+        rows = (await test_db.execute(
+            select(AgentDefinition).where(AgentDefinition.user_id == test_user.id)
+        )).scalars().all()
+        assert len(rows) == 1
+        assert rows[0].name == "test-plugin:my-agent"
+        assert rows[0].source == "plugin:test-plugin"
+
+    @pytest.mark.asyncio
+    async def test_unload_deletes_plugin_agents(
+        self, plugin_dir_with_agent, test_db, test_user,
+    ):
+        """Unloading a plugin removes its DB-backed agents."""
+        from sqlalchemy import select
+        from core.db_models import AgentDefinition
+
+        async def _get_test_db():
+            return test_db
+
+        loader = PluginLoader()
+        with patch("core.database.get_db", side_effect=_get_test_db):
+            await loader.load_plugin(plugin_dir_with_agent)
+            await loader.unload_plugin("test-plugin")
+
+        rows = (await test_db.execute(select(AgentDefinition))).scalars().all()
+        assert rows == []
+
+    @pytest.mark.asyncio
+    async def test_user_edited_agent_not_overwritten(
+        self, plugin_dir_with_agent, test_db, test_user,
+    ):
+        """If a user has an agent with the same namespaced name, plugin sync skips it."""
+        from sqlalchemy import select
+        from core.db_models import AgentDefinition
+
+        # Pre-seed a user-owned row with the namespaced name
+        existing = AgentDefinition(
+            user_id=test_user.id,
+            name="test-plugin:my-agent",
+            description="my edited version",
+            system_prompt="custom prompt",
+            source="user",
+        )
+        test_db.add(existing)
+        await test_db.commit()
+
+        async def _get_test_db():
+            return test_db
+
+        loader = PluginLoader()
+        with patch("core.database.get_db", side_effect=_get_test_db):
+            await loader.load_plugin(plugin_dir_with_agent)
+
+        rows = (await test_db.execute(
+            select(AgentDefinition).where(AgentDefinition.user_id == test_user.id)
+        )).scalars().all()
+        assert len(rows) == 1
+        assert rows[0].source == "user"  # not overwritten
+        assert rows[0].description == "my edited version"
+
+
 class TestPluginList:
     @pytest.mark.asyncio
     async def test_list_plugins(self, plugin_dir):
