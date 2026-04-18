@@ -80,3 +80,31 @@ class TestRateLimit:
         # Cleanup
         reset_limits("user_a")
         reset_limits("user_b")
+
+
+class TestAgentRunLimit:
+    def test_within_minute_cap(self):
+        for _ in range(10):
+            allowed, reason = check_rate_limit("testuser", "agent_run")
+            assert allowed, reason
+
+    def test_exceeds_minute_cap(self):
+        for _ in range(10):
+            check_rate_limit("testuser", "agent_run")
+        allowed, reason = check_rate_limit("testuser", "agent_run")
+        assert not allowed
+        assert "agent runs" in reason.lower()
+
+
+class TestTokenCreateLimit:
+    def test_within_hourly_cap(self):
+        for _ in range(5):
+            allowed, reason = check_rate_limit("testuser", "token_create")
+            assert allowed, reason
+
+    def test_exceeds_hourly_cap(self):
+        for _ in range(5):
+            check_rate_limit("testuser", "token_create")
+        allowed, reason = check_rate_limit("testuser", "token_create")
+        assert not allowed
+        assert "token creation" in reason.lower()

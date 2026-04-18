@@ -43,7 +43,6 @@ You are a minimal agent.
         assert result.name == "a1"
         assert result.description == "A minimal agent"
         assert result.system_prompt == "You are a minimal agent."
-        assert result.trigger == "manual"
         assert result.memory_scope == "user"
         assert result.tools is None
 
@@ -116,7 +115,33 @@ body
         result = parse_agent_file(path)
         assert result.tools == ["Read", "Write", "Grep"]
 
+    def test_skills_field_parsed(self, tmp_path):
+        path = _write_agent(tmp_path, "a8a", """---
+name: a8a
+description: d
+skills:
+  - research
+  - briefing
+---
+
+body
+""")
+        result = parse_agent_file(path)
+        assert result.skills == ["research", "briefing"]
+
+    def test_skills_absent_is_none(self, tmp_path):
+        path = _write_agent(tmp_path, "a8b", """---
+name: a8b
+description: d
+---
+
+body
+""")
+        result = parse_agent_file(path)
+        assert result.skills is None
+
     def test_cron_trigger_parsed(self, tmp_path):
+        # Legacy trigger/cron/timezone keys are silently ignored (logged only).
         path = _write_agent(tmp_path, "a9", """---
 name: a9
 description: d
@@ -125,24 +150,13 @@ cron: "0 8 * * 1-5"
 timezone: Europe/London
 ---
 
-Run every weekday at 8 AM.
+Legacy frontmatter keys should be parsed without error.
 """)
         result = parse_agent_file(path)
-        assert result.trigger == "cron"
-        assert result.cron_expression == "0 8 * * 1-5"
-        assert result.cron_timezone == "Europe/London"
-
-    def test_invalid_trigger_defaults_to_manual(self, tmp_path):
-        path = _write_agent(tmp_path, "a10", """---
-name: a10
-description: d
-trigger: nonsense
----
-
-body
-""")
-        result = parse_agent_file(path)
-        assert result.trigger == "manual"
+        assert result is not None
+        assert result.name == "a9"
+        assert not hasattr(result, "trigger")
+        assert not hasattr(result, "cron_expression")
 
     def test_memory_scope_invalid_defaults_to_user(self, tmp_path):
         path = _write_agent(tmp_path, "a11", """---
@@ -170,7 +184,9 @@ body
         assert result.max_turns == 42
         assert result.timeout_seconds == 600
 
-    def test_webhook_url_parsed(self, tmp_path):
+    def test_legacy_webhook_url_ignored(self, tmp_path):
+        # webhook-url was dropped with the AgentDefinition.webhook_url column.
+        # Presence in YAML is logged and ignored -- the parser still succeeds.
         path = _write_agent(tmp_path, "a13", """---
 name: a13
 description: d
@@ -180,22 +196,8 @@ webhook-url: https://example.com/hook
 body
 """)
         result = parse_agent_file(path)
-        assert result.webhook_url == "https://example.com/hook"
-
-    def test_cron_trigger_without_expression_still_parses(self, tmp_path):
-        # Loader warns but doesn't reject; DB-level validation catches this
-        path = _write_agent(tmp_path, "a14", """---
-name: a14
-description: d
-trigger: cron
----
-
-body
-""")
-        result = parse_agent_file(path)
         assert result is not None
-        assert result.trigger == "cron"
-        assert result.cron_expression is None
+        assert not hasattr(result, "webhook_url")
 
     def test_disabled_flag(self, tmp_path):
         path = _write_agent(tmp_path, "a15", """---
@@ -406,10 +408,9 @@ body
         assert {r.user_id for r in rows} == {user.id, u2.id}
 
     @pytest.mark.asyncio
-    async def test_cron_yaml_sync_leaves_next_run_at_unset(self, tmp_path, loader_db):
-        """Sync does not compute next_run_at for cron YAML agents -- the
-        scheduler fills it in lazily on first pass. Guard against a future
-        refactor that might quietly start computing it (or stop)."""
+    async def test_legacy_cron_yaml_syncs_cleanly(self, tmp_path, loader_db):
+        """Legacy trigger/cron/timezone YAML keys are logged + ignored by the
+        parser and must not leak into the DB row (those columns are gone)."""
         db, user = loader_db
         _write_agent(tmp_path, "cron-y", """---
 name: cron-y
@@ -429,6 +430,5 @@ body
                 AgentDefinition.name == "cron-y",
             ),
         )).scalar_one()
-        assert row.trigger == "cron"
-        assert row.cron_expression == "0 8 * * 1-5"
-        assert row.next_run_at is None
+        assert row.name == "cron-y"
+        assert row.source == "yaml"

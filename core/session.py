@@ -413,14 +413,31 @@ async def _maybe_enqueue_extract(cs: dict, user_id: str, conv_id: str) -> None:
     )
 
 
-async def load_conversation(conversation_id: str) -> list[dict[str, Any]]:
-    """Load messages from the database for a given conversation."""
+async def load_conversation(
+    conversation_id: str,
+    user_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Load messages from the database for a given conversation.
+
+    If ``user_id`` is provided, the conversation must belong to that user or
+    an empty list is returned. Callers that already verified ownership may
+    omit ``user_id``; anything reachable from a user-supplied ID must pass it.
+    """
     from core.database import get_db
-    from core.db_models import Message
+    from core.db_models import Conversation, Message
     from sqlalchemy import select
 
     db = await get_db()
     try:
+        if user_id is not None:
+            owner_row = (await db.execute(
+                select(Conversation.id).where(
+                    Conversation.id == conversation_id,
+                    Conversation.user_id == user_id,
+                ),
+            )).scalar_one_or_none()
+            if owner_row is None:
+                return []
         result = await db.execute(
             select(Message)
             .where(Message.conversation_id == conversation_id)
@@ -446,10 +463,14 @@ async def load_conversation(conversation_id: str) -> list[dict[str, Any]]:
 
 
 async def fork_conversation(source_conv_id: str, user_id: str) -> tuple[str, list[dict[str, Any]]]:
-    """Fork a conversation: copy all messages into a new Conversation row."""
+    """Fork a conversation: copy all messages into a new Conversation row.
+
+    The source conversation must belong to ``user_id``; otherwise this raises
+    ``ValueError`` (indistinguishable from "not found", by design).
+    """
     lock = _save_locks.setdefault(source_conv_id, asyncio.Lock())
     async with lock:
-        messages = await load_conversation(source_conv_id)
+        messages = await load_conversation(source_conv_id, user_id=user_id)
         if not messages:
             raise ValueError(f"No messages found for conversation {source_conv_id}")
 

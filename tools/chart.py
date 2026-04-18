@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,8 @@ from tools.registry import register_tool
 from tools.data_tools import get_datasets
 from tools.chart_theme import apply_theme
 from core.session import current_session_get, current_session_set
+
+logger = logging.getLogger(__name__)
 
 
 def _set_last_figure(fig: Any) -> None:
@@ -22,6 +25,83 @@ def get_last_figure() -> Any:
     return current_session_get("last_figure")
 
 
+def _set_last_d3_spec(spec: dict) -> None:
+    """Store the last D3 chart spec in the current session."""
+    current_session_set("last_d3_spec", spec)
+
+
+def get_last_d3_spec() -> dict | None:
+    """Retrieve the last D3 chart spec from the current session."""
+    return current_session_get("last_d3_spec")
+
+
+# Chart types the D3 renderer currently handles. Others fall back to Plotly.
+_D3_SUPPORTED = {"line"}
+
+
+def _build_d3_line_spec(
+    df, x: str, y: str, title: str, tool_input: dict[str, Any]
+) -> dict:
+    """Build a neutral chart spec for the D3 line renderer.
+
+    Supports raw x_values/y_values arrays or a dataframe with named columns.
+    Multiple series: pass `color` column (groups by value) or a list of y columns.
+    """
+    series: list[dict] = []
+
+    if df is None or df.empty:
+        return {"error": "No data for D3 line chart"}
+
+    # Resolve x/y columns
+    if not x:
+        x = df.columns[0]
+    if not y:
+        y = df.columns[1] if len(df.columns) > 1 else df.columns[0]
+
+    color_col = tool_input.get("color")
+    if color_col and color_col in df.columns:
+        for group_val, sub in df.groupby(color_col):
+            series.append({
+                "name": str(group_val),
+                "data": [
+                    {"x": _coerce_x(xv), "y": _coerce_y(yv)}
+                    for xv, yv in zip(sub[x].tolist(), sub[y].tolist())
+                ],
+            })
+    else:
+        series.append({
+            "name": str(y),
+            "data": [
+                {"x": _coerce_x(xv), "y": _coerce_y(yv)}
+                for xv, yv in zip(df[x].tolist(), df[y].tolist())
+            ],
+        })
+
+    return {
+        "type": "line",
+        "title": title,
+        "xLabel": tool_input.get("x_label", str(x)),
+        "yLabel": tool_input.get("y_label", str(y)),
+        "series": series,
+    }
+
+
+def _coerce_x(v):
+    """x can be numeric or string. Pass through native-JSON types."""
+    if hasattr(v, "item"):
+        return v.item()
+    return v
+
+
+def _coerce_y(v):
+    if hasattr(v, "item"):
+        return v.item()
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
 # Chart types that don't use x/y in the standard way
 _NO_XY_TYPES = {"pie", "sunburst", "treemap", "funnel", "sankey"}
 
@@ -30,6 +110,7 @@ async def handle_create_chart(tool_input: dict[str, Any]) -> str:
     """Create a chart from a loaded dataset or raw data arrays."""
     name = tool_input.get("name", "")
     chart_type = tool_input.get("chart_type", "bar")
+    engine = tool_input.get("engine", "plotly")
     x = tool_input.get("x", "")
     y = tool_input.get("y", "")
     title = tool_input.get("title", "Chart")
@@ -43,8 +124,8 @@ async def handle_create_chart(tool_input: dict[str, Any]) -> str:
 
     try:
         import pandas as pd
-        import plotly.express as px
-        import plotly.graph_objects as go
+        import plotly.express as px  # noqa: F401
+        import plotly.graph_objects as go  # noqa: F401
 
         # Determine data source
         df = None
@@ -71,7 +152,27 @@ async def handle_create_chart(tool_input: dict[str, Any]) -> str:
                 "or labels/values arrays."
             })
 
-        # Build the figure
+        # D3 path — currently only line charts. Falls through to Plotly otherwise.
+        if engine == "d3":
+            if chart_type in _D3_SUPPORTED:
+                spec = _build_d3_line_spec(df, x, y, title, tool_input)
+                if "error" in spec:
+                    return json.dumps(spec)
+                _set_last_d3_spec(spec)
+                return json.dumps({
+                    "status": "created",
+                    "chart_type": chart_type,
+                    "engine": "d3",
+                    "title": title,
+                    "inline": True,
+                })
+            logger.info(
+                "D3 engine requested for chart_type=%r; not supported (only %s). "
+                "Falling back to Plotly.",
+                chart_type, sorted(_D3_SUPPORTED),
+            )
+
+        # Build the figure (Plotly)
         fig = _build_figure(chart_type, df, x, y, z, color, title, tool_input)
 
         if isinstance(fig, str):
@@ -93,13 +194,18 @@ async def handle_create_chart(tool_input: dict[str, Any]) -> str:
             else:
                 fig.write_html(str(path))
 
-        return json.dumps({
+        result: dict[str, Any] = {
             "status": "created",
             "chart_type": chart_type,
+            "engine": "plotly",
             "title": title,
             "inline": True,
             "saved_to": output_path or None,
-        })
+        }
+        if engine != "plotly":
+            # Signal that we honored a fallback (e.g. engine="d3" + unsupported type).
+            result["requested_engine"] = engine
+        return json.dumps(result)
     except Exception as e:
         return json.dumps({"error": str(e)})
 
@@ -319,13 +425,14 @@ register_tool(
     name="CreateChart",
     aliases=["create_chart"],
     description=(
-        "Create an interactive Plotly chart displayed inline in the chat. "
-        "Use for quick visualizations without writing Python code. "
-        "Accepts a named dataset (loaded via LoadData) or raw arrays (x_values/y_values/labels/values). "
-        "Types: bar, line, scatter, histogram, box, area, pie, heatmap, "
-        "violin, treemap, sunburst, funnel, waterfall, radar, sankey, "
-        "candlestick, gauge. "
-        "For complex or highly customized charts, use PythonExec with plotly or matplotlib instead."
+        "Render a themed, inline chart. Prefer this over PythonExec for any standard plot — "
+        "line, scatter, bar, histogram, box, area, pie, heatmap, violin, treemap, sunburst, "
+        "funnel, waterfall, radar, sankey, candlestick, gauge. "
+        "Pass raw data via x_values/y_values (or labels/values), or reference a dataset loaded "
+        "with LoadData by name. For simple math plots (sin(x), polynomial, etc.) compute the "
+        "arrays in a short PythonExec, then pass them here — do NOT write a .plotly.json file. "
+        "Only reach for PythonExec + plotly/matplotlib when this tool genuinely cannot express "
+        "the chart (e.g. custom 3D, bespoke layouts, chart-of-charts)."
     ),
     input_schema={
         "type": "object",
@@ -338,6 +445,19 @@ register_tool(
                 "type": "string",
                 "enum": _ALL_CHART_TYPES,
                 "description": "Type of chart",
+            },
+            "engine": {
+                "type": "string",
+                "enum": ["plotly", "d3"],
+                "description": "Rendering engine. Default 'plotly'.",
+            },
+            "x_label": {
+                "type": "string",
+                "description": "Axis label for x (defaults to the column name)",
+            },
+            "y_label": {
+                "type": "string",
+                "description": "Axis label for y (defaults to the column name)",
             },
             "x": {"type": "string", "description": "Column for x-axis / categories"},
             "y": {"type": "string", "description": "Column for y-axis / values"},

@@ -17,9 +17,10 @@ paths:
 server:
   host: 0.0.0.0
   port: 8000
+  frontend: svelte
 
-# Database (SQLite for dev, PostgreSQL for prod)
-database_url: "sqlite+aiosqlite:///data/lightcc.db"
+# Database: set DATABASE_URL env var for Postgres; SQLite is the dev fallback
+# when the env var is unset. The env var ALWAYS wins over any value set here.
 
 auth:
   registration_enabled: true
@@ -33,28 +34,31 @@ available_models:
   - claude-opus-4-6
 
 # Model routing: classify input and direct to different models for cost/latency.
-# Disabled by default. Rules are evaluated in order; first regex match wins.
-# No match falls back to the default model above (Sonnet).
+# Modes:
+#   off   -- always use `model` above (no routing)
+#   regex -- pattern rules below, first match wins (cheap, deterministic, dumb)
+#   llm   -- regex rules run first as a fast path; anything unmatched is
+#            classified by a small model (`routing_classifier_model`) into
+#            TRIVIAL/STANDARD/COMPLEX and dispatched per `routing_tier_models`
 #
 # Tiers:  Haiku (light) -> Sonnet (default) -> Opus (heavy)
-routing_enabled: true
+routing_mode: llm
+routing_classifier_model: claude-haiku-4-5-20251001
+routing_tier_models:
+  TRIVIAL:  claude-haiku-4-5-20251001
+  STANDARD: claude-sonnet-4-6
+  COMPLEX:  claude-opus-4-6
 routing_rules:
-  # --- Tier 1: Haiku -- greetings, simple questions, status checks ---
+  # --- Tier 1: Haiku fast path -- greetings, acknowledgements, trivial lookups ---
+  # (These are safe to regex-match: never worth paying for an LLM classifier call.)
   - pattern: "^(hello|hi|hey|thanks|thank you|good morning|good afternoon)\\b"
     model: claude-haiku-4-5-20251001
   - pattern: "^(what time|what date|what day)\\b"
     model: claude-haiku-4-5-20251001
   - pattern: "^(yes|no|ok|sure|got it|sounds good|perfect)\\b"
     model: claude-haiku-4-5-20251001
-  # --- Tier 3: Opus -- complex multi-step work, architecture, deep analysis ---
-  - pattern: "(refactor|redesign|rearchitect|rewrite)\\b"
-    model: claude-opus-4-6
-  - pattern: "(review|audit|evaluate|assess)\\s+(the |this |my )?(code|codebase|architecture|system)"
-    model: claude-opus-4-6
-  - pattern: "(create|write|build|design)\\s+(a |an )?(plan|architecture|strategy|spec)"
-    model: claude-opus-4-6
-  - pattern: "(research|compare|investigate|deep.?dive)"
-    model: claude-opus-4-6
-  - pattern: "(implement|build|create)\\b.{0,40}(system|module|feature|service|api)\\b"
-    model: claude-opus-4-6
-  # --- Tier 2: Sonnet -- everything else (default, no rule needed) ---
+  # --- No Opus fast path ---
+  # The old regex rules (refactor|compare|rewrite|build a feature) were too greedy
+  # and pulled ordinary requests into Opus. In llm mode, the Haiku classifier
+  # decides. In regex mode, everything unmatched falls through to the default
+  # (Sonnet), which is almost always the right call.

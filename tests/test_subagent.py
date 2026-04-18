@@ -157,18 +157,19 @@ class TestSubAgentSpawn:
 
 # ── Sub-agent tool handler ─────────────────────────────────────────────
 
-class TestSubAgentToolHandler:
+class TestTaskToolHandler:
     @pytest.mark.asyncio
-    async def test_handle_agent_spawn(self, mock_anthropic_client, _clean_subagent_state):
-        """The Agent tool handler should spawn and return results."""
-        from tools.subagent import handle_agent
+    async def test_handle_task_spawn(self, mock_anthropic_client, _clean_subagent_state):
+        """The Task tool handler should spawn a builtin and return results."""
+        from tools.subagent import handle_task
 
         _, set_responses = mock_anthropic_client
         set_responses([_build_text_events("Handler result")])
 
-        result_json = await handle_agent({
+        result_json = await handle_task({
             "prompt": "Explore the project",
-            "agent_type": "explorer",
+            "subagent_type": "explorer",
+            "description": "test",
         })
 
         result = json.loads(result_json)
@@ -176,16 +177,16 @@ class TestSubAgentToolHandler:
         assert "Handler result" in result.get("result", "")
 
     @pytest.mark.asyncio
-    async def test_handle_agent_background(self, mock_anthropic_client, _clean_subagent_state):
-        """Background agent should return agent_id immediately."""
-        from tools.subagent import handle_agent
+    async def test_handle_task_background(self, mock_anthropic_client, _clean_subagent_state):
+        """Background delegation should return agent_id immediately."""
+        from tools.subagent import handle_task
 
         _, set_responses = mock_anthropic_client
         set_responses([_build_text_events("BG result")])
 
-        result_json = await handle_agent({
+        result_json = await handle_task({
             "prompt": "Long running task",
-            "agent_type": "researcher",
+            "subagent_type": "researcher",
             "run_in_background": True,
             "description": "Test background agent",
         })
@@ -201,15 +202,15 @@ class TestAgentStatus:
     @pytest.mark.asyncio
     async def test_status_of_completed_agent(self, mock_anthropic_client, _clean_subagent_state):
         """Should return status for a completed agent."""
-        from tools.subagent import handle_agent, handle_agent_status
+        from tools.subagent import handle_task, handle_agent_status
 
         _, set_responses = mock_anthropic_client
         set_responses([_build_text_events("Done")])
 
-        # Spawn foreground agent
-        spawn_result = json.loads(await handle_agent({
+        spawn_result = json.loads(await handle_task({
             "prompt": "Quick task",
-            "agent_type": "default",
+            "subagent_type": "default",
+            "description": "q",
         }))
 
         agent_id = spawn_result.get("agent_id")
@@ -235,16 +236,17 @@ class TestUnifiedAgentRegistry:
     async def test_resolves_user_agent_by_name(
         self, mock_anthropic_client, _clean_subagent_state, test_db, test_user,
     ):
-        """A user-created AgentDefinition should be invocable via the Agent tool by name."""
+        """A user-created AgentDefinition should be invocable via the Task tool by name."""
         from core.agent_crud import create_agent
         from core.session import create_connection, set_current_session, destroy_connection
-        from tools.subagent import handle_agent
+        from tools.subagent import handle_task
 
         async def _get_db():
             return test_db
 
         with patch("core.agent_crud.get_db", side_effect=_get_db), \
-             patch("core.database.get_db", side_effect=_get_db):
+             patch("core.database.get_db", side_effect=_get_db), \
+             patch("core.agent_runner.get_db", side_effect=_get_db):
             await create_agent(
                 user_id=test_user.id,
                 name="my-custom-analyst",
@@ -260,9 +262,10 @@ class TestUnifiedAgentRegistry:
             create_connection("test-session", user_id=test_user.id)
             set_current_session("test-session")
             try:
-                result_json = await handle_agent({
+                result_json = await handle_task({
                     "prompt": "Summarize X",
-                    "agent_type": "my-custom-analyst",
+                    "subagent_type": "my-custom-analyst",
+                    "description": "custom",
                 })
             finally:
                 destroy_connection("test-session")
@@ -274,11 +277,12 @@ class TestUnifiedAgentRegistry:
     @pytest.mark.asyncio
     async def test_unknown_agent_reports_error(self, _clean_subagent_state):
         """An unknown agent name (no builtin, no user def) should return a clear error."""
-        from tools.subagent import handle_agent
+        from tools.subagent import handle_task
 
-        result_json = await handle_agent({
+        result_json = await handle_task({
             "prompt": "do something",
-            "agent_type": "does-not-exist-xyz",
+            "subagent_type": "does-not-exist-xyz",
+            "description": "n/a",
         })
         result = json.loads(result_json)
         assert "error" in result
@@ -288,10 +292,10 @@ class TestUnifiedAgentRegistry:
     async def test_user_agent_shadows_builtin(
         self, mock_anthropic_client, _clean_subagent_state, test_db, test_user,
     ):
-        """A user agent named after a builtin should shadow the builtin's system prompt."""
-        from core.agent_crud import create_agent
+        """A user agent named after a builtin should route through the AgentDefinition path."""
+        from core.agent_crud import create_agent, get_agent_by_name
         from core.session import create_connection, set_current_session, destroy_connection
-        from tools.subagent import _resolve_agent_type
+        from tools.subagent import _resolve_agent_definition
 
         async def _get_db():
             return test_db
@@ -310,7 +314,7 @@ class TestUnifiedAgentRegistry:
             create_connection("test-session-shadow", user_id=test_user.id)
             set_current_session("test-session-shadow")
             try:
-                resolved = await _resolve_agent_type("researcher")
+                resolved = await _resolve_agent_definition("researcher", test_user.id)
             finally:
                 destroy_connection("test-session-shadow")
 

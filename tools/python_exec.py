@@ -78,17 +78,15 @@ register_tool(
     description=(
         "Execute a Python script as a .py file. Preferred over Bash for all Python code — "
         "avoids shell quoting issues on Windows. "
-        "Use for: data analysis, computations, file processing, custom visualizations, "
-        "any task that needs Python libraries. "
+        "Use for: data analysis, computations, file processing, any task that needs Python libraries. "
         "The env var OUTPUT_DIR points to a writable directory for saving output files — "
         "use `import os; out = os.environ['OUTPUT_DIR']` to get the path. "
-        "Print output file paths to stdout for auto-rendering of images and charts in the UI. "
-        "For charts: save as *.plotly.json for interactive rendering, *.png for static. "
-        "Chart style: one chart = one idea. Prefer a single plot over multi-subplot figures; "
-        "if you truly need subplots, cap at 2. Do not embed long text annotations, callout "
-        "boxes, chemical equations, or commentary inside the figure — put that content in the "
-        "chat message instead. Keep titles short, avoid overlapping labels, and do not set "
-        "a `template` (the UI applies its own theme)."
+        "Print output file paths to stdout for auto-rendering of images in the UI. "
+        "For charts: do NOT write .plotly.json files here — compute the data arrays, then call "
+        "the CreateChart tool with x_values/y_values. Only fall back to writing a raw "
+        ".plotly.json in this tool when CreateChart genuinely cannot express the chart "
+        "(custom 3D, chart-of-charts, highly bespoke layouts). When that rare case applies: "
+        "one chart = one idea, no embedded long text or callouts, no `template` set."
     ),
     input_schema={
         "type": "object",

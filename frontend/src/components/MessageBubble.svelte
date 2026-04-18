@@ -5,6 +5,7 @@
   import { currentConversation } from '../state.svelte.js';
   import ToolCall from './ToolCall.svelte';
   import Chart from './renderers/Chart.svelte';
+  import D3Chart from './renderers/D3Chart.svelte';
   import Image from './renderers/Image.svelte';
   import Table from './renderers/Table.svelte';
 
@@ -98,6 +99,9 @@
 
       <div class="inline-media">
         {#each msg.toolCalls as tc (tc.id)}
+          {#if tc.d3Chart}
+            <D3Chart spec={tc.d3Chart.spec} title={tc.d3Chart.title} />
+          {/if}
           {#if tc.chart}
             <Chart plotlyJson={tc.chart.plotlyJson} title={tc.chart.title} />
           {/if}

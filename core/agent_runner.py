@@ -1,24 +1,20 @@
-"""Agent execution engine -- bridge between AgentDefinition and core.agent.run().
+"""Agent execution -- the callable-subagent engine.
 
-Flow:
-    trigger_agent_run(agent_def, trigger_type)
-      -> creates AgentRun row (status="running")
-      -> enqueues _execute_agent_run job
-      -> returns AgentRun immediately (caller can poll status)
+Provides the central primitive ``run_agent_once`` plus two thin wrappers:
 
-    _execute_agent_run(agent_id, run_id, ...):
-      -> looks up AgentDefinition
-      -> builds system prompt + tool schemas
-      -> calls core.agent.run(...)
-      -> persists output as a Conversation
-      -> updates AgentRun (status, result, tokens, conversation_id)
-      -> fires webhook if webhook_url set
+- ``trigger_agent_run`` -- enqueues an async background run (returns immediately).
+- ``_execute_agent_run`` -- the arq job handler that dequeues and calls
+  ``run_agent_once`` with persistence + webhook semantics.
+
+All three entry points (Task tool, headless POST /api/agents/run, scheduler
+via Schedule rows that reference an agent name) ultimately call
+``run_agent_once`` -- keeping the hot path in one place.
 """
 
 from __future__ import annotations
 
-import json
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -31,11 +27,26 @@ from core.job_queue import register_job, enqueue
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class AgentRunResult:
+    """Outcome of a single agent run. Returned by ``run_agent_once``."""
+
+    run_id: str
+    status: str  # "completed" | "failed"
+    result_text: str | None
+    error: str | None
+    tokens_used: int
+    conversation_id: str | None = None
+
+
 async def trigger_agent_run(
     agent_def: AgentDefinition,
     trigger_type: str = "manual",
 ) -> AgentRun:
-    """Create an AgentRun record and enqueue execution. Returns the pre-run record."""
+    """Create an AgentRun row (status=running) and enqueue background execution.
+
+    Returns the pre-run record so callers can poll or return 202 Accepted.
+    """
     db = await get_db()
     try:
         run = AgentRun(
@@ -48,7 +59,6 @@ async def trigger_agent_run(
         await db.commit()
         await db.refresh(run)
         run_id = run.id
-        # Detach for return (we'll re-query in the worker)
         run_copy = AgentRun(
             id=run.id,
             agent_id=run.agent_id,
@@ -70,50 +80,73 @@ async def trigger_agent_run(
     return run_copy
 
 
-async def _execute_agent_run(
-    agent_id: str,
-    run_id: str,
+async def run_agent_once(
+    agent_def: AgentDefinition,
+    prompt: str,
+    *,
     trigger_type: str = "manual",
-    **_kwargs: Any,
-) -> None:
-    """Execute an agent. Loads the definition, runs it, persists output."""
+    run_id: str | None = None,
+    parent_session_id: str | None = None,
+    persist_conversation: bool = False,
+    tool_filter: list[str] | None = None,
+) -> AgentRunResult:
+    """Execute an agent once with the given prompt.
+
+    This is the single hot path for all agent execution. Creates (or updates)
+    an ``AgentRun`` row, runs the isolated agent loop with the agent's own
+    system prompt + tool filter, and returns ``AgentRunResult``.
+
+    ``tool_filter`` optionally narrows the agent's own ``tools_list`` further
+    (never widens it). Used by the ``Task`` tool when a caller wants to
+    restrict a subagent to a subset of its permitted tools.
+
+    Side effects are opt-in:
+      - ``persist_conversation=True`` saves the run's output as a Conversation
+        row so it appears in the user's sidebar. Useful for scheduled/webhook
+        runs; NOT wanted for in-conversation Task tool calls (the parent
+        conversation is already the record).
+
+    Webhooks used to fire here when AgentDefinition.webhook_url was set.
+    That field has been dropped -- if we re-add webhook semantics they should
+    live on the Schedule row, not the agent persona.
+    """
     from core import agent as agent_module
-    from core.session import set_current_session, current_session_set, connection_set
     from core.permissions import is_blocked, is_risky
     from core.sandbox import get_workspace
-    from core.webhooks import deliver_webhook
-    from server import _build_system_prompt
+    from core.session import set_current_session, current_session_set, connection_set
+    from core.system_prompt import build_system_prompt
     from tools.registry import get_all_tool_schemas, get_tool_schemas
 
+    # Snapshot agent-def fields we need (avoid detached-instance problems).
+    user_id = agent_def.user_id
+    a_name = agent_def.name
+    a_system_prompt = agent_def.system_prompt
+    a_tools = agent_def.tools_list
+    a_skills = agent_def.skills_list
+    a_model = agent_def.model
+    a_max_turns = agent_def.max_turns
+
+    # Ensure we have an AgentRun row: create one if the caller didn't.
     db = await get_db()
     try:
-        # Reload the agent definition
-        res = await db.execute(select(AgentDefinition).where(AgentDefinition.id == agent_id))
-        agent_def = res.scalar_one_or_none()
-        if not agent_def:
-            logger.error(f"Agent {agent_id} not found; aborting run {run_id}")
-            return
-
-        # Snapshot fields we need outside the session
-        user_id = agent_def.user_id
-        a_name = agent_def.name
-        a_system_prompt = agent_def.system_prompt
-        a_tools = agent_def.tools_list
-        a_model = agent_def.model
-        a_max_turns = agent_def.max_turns
-        a_webhook = agent_def.webhook_url
-        a_cron_expression = agent_def.cron_expression
-        a_cron_timezone = agent_def.cron_timezone or "UTC"
-        a_trigger = agent_def.trigger
+        if run_id is None:
+            run = AgentRun(
+                agent_id=agent_def.id,
+                user_id=user_id,
+                status="running",
+                trigger_type=trigger_type,
+            )
+            db.add(run)
+            await db.commit()
+            await db.refresh(run)
+            run_id = run.id
     finally:
         await db.close()
 
-    # Set session context so tools can resolve the user. We create a synthetic
-    # ``agent-{run_id}`` session with only ``user_id`` populated -- there is no
-    # conversation attached and no message history. Tools that call
-    # ``current_conversation()`` or expect ``messages``/``active_model`` from
-    # the session must handle missing values; agent runs are stateless.
-    session_id = f"agent-{run_id}"
+    # Session context: tools that call current_session_get need a user.
+    # Use a parent-derived id when delegating (Task tool passes one through),
+    # otherwise synthesise a fresh ``agent-<run_id>`` id.
+    session_id = parent_session_id or f"agent-{run_id}"
     set_current_session(session_id)
     current_session_set("user_id", user_id)
     connection_set(session_id, "user_id", user_id)
@@ -125,26 +158,33 @@ async def _execute_agent_run(
             return "DENIED: Risky commands cannot run in agent executions."
         return True
 
-    # Build system prompt including the agent's own instruction
     user_workspace = get_workspace(user_id)
-    system = _build_system_prompt(
+    system = build_system_prompt(
         skill_prompt=a_system_prompt,
         outputs_dir=str(user_workspace.outputs),
+        allowed_skills=a_skills,
     )
 
-    # Resolve tools (filter or all)
-    tools = get_tool_schemas(a_tools) if a_tools else get_all_tool_schemas()
+    # Tool filter resolution: agent's own list, optionally narrowed.
+    if tool_filter is not None and a_tools is not None:
+        effective = [t for t in tool_filter if t in a_tools]
+    elif tool_filter is not None:
+        effective = list(tool_filter)
+    else:
+        effective = a_tools
+    # If the agent composes skills and has a narrowed tool list, auto-include
+    # the ``Skill`` tool -- without it the agent can't actually invoke the
+    # skills it declared.
+    if a_skills and effective is not None and "Skill" not in effective:
+        effective = [*effective, "Skill"]
+    tools = get_tool_schemas(effective) if effective else get_all_tool_schemas()
 
-    # Seed message: agent description acts as the initial user message
-    messages: list[dict[str, Any]] = [
-        {"role": "user", "content": f"Execute your task ({a_name})."},
-    ]
+    messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
 
-    # We want the *final* assistant text as the run's result, not every
-    # narration chunk emitted between tool uses ("Let me search...", "Now
-    # fetching..."). Each tool_start means a new assistant turn follows, so
-    # whatever text preceded it was mid-process thinking -- drop it and only
-    # keep text produced after the last tool use.
+    # Collect only the final assistant text -- drop mid-process narration
+    # ("Let me search...", "Now fetching..."). Each tool_start marks a new
+    # assistant turn, so we clear the buffer then and keep only text produced
+    # after the last tool use.
     output_parts: list[str] = []
 
     async def on_text(text: str) -> None:
@@ -156,13 +196,14 @@ async def _execute_agent_run(
     async def on_tool_end(ctx: Any, result: str) -> None:
         pass
 
-    status = "running"
-    error: str | None = None
     tokens_used = 0
 
     async def on_usage(input_tokens: int, output_tokens: int) -> None:
         nonlocal tokens_used
         tokens_used += input_tokens + output_tokens
+
+    status = "running"
+    error: str | None = None
 
     try:
         await agent_module.run(
@@ -185,38 +226,38 @@ async def _execute_agent_run(
 
     full_text = "".join(output_parts)
     result_text = full_text[:10000] if full_text else None
-
-    # Persist conversation + update run
     now = datetime.now(timezone.utc)
     conv_id: str | None = None
+
     db = await get_db()
     try:
-        conv = Conversation(
-            user_id=user_id,
-            title=f"[Agent] {a_name}",
-            model=a_model,
-        )
-        db.add(conv)
-        await db.flush()
-        conv_id = conv.id
+        if persist_conversation:
+            conv = Conversation(
+                user_id=user_id,
+                title=f"[Agent] {a_name}",
+                model=a_model,
+            )
+            db.add(conv)
+            await db.flush()
+            conv_id = conv.id
 
-        db.add(DbMessage(
-            conversation_id=conv_id,
-            role="user",
-            content=f"[Agent run triggered by {trigger_type}]",
-        ))
-        if full_text:
             db.add(DbMessage(
                 conversation_id=conv_id,
-                role="assistant",
-                content=full_text,
+                role="user",
+                content=prompt,
             ))
-        elif error:
-            db.add(DbMessage(
-                conversation_id=conv_id,
-                role="assistant",
-                content=f"Agent run failed: {error}",
-            ))
+            if full_text:
+                db.add(DbMessage(
+                    conversation_id=conv_id,
+                    role="assistant",
+                    content=full_text,
+                ))
+            elif error:
+                db.add(DbMessage(
+                    conversation_id=conv_id,
+                    role="assistant",
+                    content=f"Agent run failed: {error}",
+                ))
 
         await db.execute(
             update(AgentRun)
@@ -230,17 +271,10 @@ async def _execute_agent_run(
                 conversation_id=conv_id,
             )
         )
-        # Update last_run_at and (if cron) next_run_at on the definition
-        from core.scheduler import _compute_next_run
-        values_to_update: dict[str, Any] = {"last_run_at": now}
-        if a_trigger == "cron" and a_cron_expression:
-            values_to_update["next_run_at"] = _compute_next_run(
-                a_cron_expression, now, a_cron_timezone,
-            )
         await db.execute(
             update(AgentDefinition)
-            .where(AgentDefinition.id == agent_id)
-            .values(**values_to_update)
+            .where(AgentDefinition.id == agent_def.id)
+            .values(last_run_at=now)
         )
         await db.commit()
     except Exception as e:
@@ -248,39 +282,56 @@ async def _execute_agent_run(
     finally:
         await db.close()
 
-    # Push a WS event so connected clients refresh the sidebar and can
-    # jump to the [Agent] conversation. Mirrors schedule_result.
+    return AgentRunResult(
+        run_id=run_id,
+        status=status,
+        result_text=result_text,
+        error=error,
+        tokens_used=tokens_used,
+        conversation_id=conv_id,
+    )
+
+
+async def _execute_agent_run(
+    agent_id: str,
+    run_id: str,
+    trigger_type: str = "manual",
+    prompt: str | None = None,
+    **_kwargs: Any,
+) -> None:
+    """Background job: looks up the agent + existing run row, runs it,
+    persists output as a Conversation, fires webhook, notifies connected WS clients.
+    """
+    db = await get_db()
+    try:
+        res = await db.execute(select(AgentDefinition).where(AgentDefinition.id == agent_id))
+        agent_def = res.scalar_one_or_none()
+    finally:
+        await db.close()
+
+    if not agent_def:
+        logger.error(f"Agent {agent_id} not found; aborting run {run_id}")
+        return
+
+    effective_prompt = prompt or f"Execute your task ({agent_def.name})."
+    result = await run_agent_once(
+        agent_def,
+        effective_prompt,
+        trigger_type=trigger_type,
+        run_id=run_id,
+        persist_conversation=True,
+    )
+
     try:
         await _notify_user_agent_result(
-            user_id=user_id,
-            agent_name=a_name,
-            run_id=run_id,
-            status=status,
-            conversation_id=conv_id,
+            user_id=agent_def.user_id,
+            agent_name=agent_def.name,
+            run_id=result.run_id,
+            status=result.status,
+            conversation_id=result.conversation_id,
         )
     except Exception as e:
-        logger.debug(f"agent_result notify failed for run {run_id}: {e}")
-
-    # Fire webhook if configured
-    if a_webhook:
-        try:
-            await deliver_webhook(
-                a_webhook,
-                {
-                    "agent_id": agent_id,
-                    "agent_name": a_name,
-                    "run_id": run_id,
-                    "status": status,
-                    "trigger_type": trigger_type,
-                    "result_summary": result_text,
-                    "error": error,
-                    "tokens_used": tokens_used,
-                    "conversation_id": conv_id,
-                    "timestamp": now.isoformat(),
-                },
-            )
-        except Exception as e:
-            logger.error(f"Webhook delivery failed for run {run_id}: {e}")
+        logger.debug(f"agent_result notify failed for run {result.run_id}: {e}")
 
 
 async def _notify_user_agent_result(
@@ -290,12 +341,7 @@ async def _notify_user_agent_result(
     status: str,
     conversation_id: str | None,
 ) -> None:
-    """Push an ``agent_result`` event to all WebSocket sessions for the user.
-
-    Piggybacks on the scheduler's ``_user_senders`` registry — any client
-    connected when the run lands gets a toast and a chance to refresh the
-    sidebar and open the linked conversation.
-    """
+    """Push an ``agent_result`` WS event to connected sessions for the user."""
     from core.scheduler import _user_senders
 
     senders = _user_senders.get(user_id, set())
@@ -308,8 +354,7 @@ async def _notify_user_agent_result(
                 "conversation_id": conversation_id,
             })
         except Exception:
-            pass  # connection may have closed
+            pass
 
 
-# Register as a distributable job
 register_job("execute_agent_run", _execute_agent_run)

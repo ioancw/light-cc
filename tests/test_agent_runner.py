@@ -214,67 +214,6 @@ class TestExecuteAgentRun:
         assert refreshed_agent.last_run_at is not None
 
     @pytest.mark.asyncio
-    async def test_cron_updates_next_run_at(self, runner_db, mock_anthropic_client, mock_webhook):
-        db, user = runner_db
-        agent = await create_agent(
-            user_id=user.id, name="exec6", description="d", system_prompt="p",
-            trigger="cron", cron_expression="0 * * * *",
-        )
-        original_next = agent.next_run_at
-        run = AgentRun(
-            agent_id=agent.id, user_id=user.id,
-            status="running", trigger_type="cron",
-        )
-        db.add(run)
-        await db.commit()
-        await db.refresh(run)
-
-        _, set_responses = mock_anthropic_client
-        set_responses([_build_text_events("tick")])
-
-        await _execute_agent_run(
-            agent_id=agent.id, run_id=run.id, trigger_type="cron",
-        )
-
-        refreshed_agent = (await db.execute(
-            select(AgentDefinition).where(AgentDefinition.id == agent.id),
-        )).scalar_one()
-        assert refreshed_agent.next_run_at is not None
-        # May or may not differ from original depending on timing, but should exist.
-        assert refreshed_agent.last_run_at is not None
-
-    @pytest.mark.asyncio
-    async def test_webhook_fires_when_url_set(self, runner_db, mock_anthropic_client):
-        db, user = runner_db
-        agent = await create_agent(
-            user_id=user.id, name="hook1", description="d", system_prompt="p",
-            webhook_url="https://example.com/hook",
-        )
-        run = AgentRun(
-            agent_id=agent.id, user_id=user.id,
-            status="running", trigger_type="manual",
-        )
-        db.add(run)
-        await db.commit()
-        await db.refresh(run)
-
-        _, set_responses = mock_anthropic_client
-        set_responses([_build_text_events("fire the hook")])
-
-        with patch("core.webhooks.deliver_webhook", new=AsyncMock(return_value=True)) as m:
-            await _execute_agent_run(
-                agent_id=agent.id, run_id=run.id, trigger_type="manual",
-            )
-
-        m.assert_awaited_once()
-        call_args = m.await_args.args
-        assert call_args[0] == "https://example.com/hook"
-        payload = call_args[1]
-        assert payload["agent_name"] == "hook1"
-        assert payload["status"] == "completed"
-        assert payload["trigger_type"] == "manual"
-
-    @pytest.mark.asyncio
     async def test_overlapping_runs_of_same_agent(self, test_user, mock_anthropic_client, mock_webhook):
         """Two back-to-back runs of the same agent must produce distinct
         AgentRun rows and distinct conversations. Uses a per-call session
@@ -333,26 +272,3 @@ class TestExecuteAgentRun:
 
         await engine.dispose()
 
-    @pytest.mark.asyncio
-    async def test_webhook_skipped_when_no_url(self, runner_db, mock_anthropic_client):
-        db, user = runner_db
-        agent = await create_agent(
-            user_id=user.id, name="hook2", description="d", system_prompt="p",
-        )
-        run = AgentRun(
-            agent_id=agent.id, user_id=user.id,
-            status="running", trigger_type="manual",
-        )
-        db.add(run)
-        await db.commit()
-        await db.refresh(run)
-
-        _, set_responses = mock_anthropic_client
-        set_responses([_build_text_events("silent")])
-
-        with patch("core.webhooks.deliver_webhook", new=AsyncMock(return_value=True)) as m:
-            await _execute_agent_run(
-                agent_id=agent.id, run_id=run.id, trigger_type="manual",
-            )
-
-        m.assert_not_awaited()

@@ -20,8 +20,9 @@ class AgentType:
     max_result_chars: int = 10000
 
 
-# Tools that sub-agents never receive (prevents recursive spawning)
-EXCLUDED_TOOLS = {"Agent", "subagent", "BackgroundAgent", "background_agent", "AgentStatus"}
+# Tools that sub-agents never receive (prevents recursive spawning).
+# Covers the canonical Task name + all registered aliases.
+EXCLUDED_TOOLS = {"Task", "Agent", "subagent", "BackgroundAgent", "background_agent", "AgentStatus"}
 
 _registry: dict[str, AgentType] = {}
 

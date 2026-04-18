@@ -1,0 +1,72 @@
+# Production overlay: adds Caddy reverse-proxy + Postgres backup.
+#
+# Usage:
+#     docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Requires DOMAIN and ADMIN_EMAIL in .env for Caddy to obtain a LetsEncrypt cert.
+
+services:
+  app:
+    # App no longer binds a host port -- Caddy fronts it on the internal network.
+    ports: !reset []
+    expose:
+      - "8000"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"   # HTTP/3
+    environment:
+      DOMAIN: "${DOMAIN:?Set DOMAIN in .env, e.g. lightcc.example.com}"
+      ADMIN_EMAIL: "${ADMIN_EMAIL:?Set ADMIN_EMAIL in .env for LetsEncrypt}"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data     # certs + account key
+      - caddy-config:/config
+    depends_on:
+      - app
+
+  # Nightly pg_dump with 14-day rotation. Writes into ./backups on the host.
+  postgres-backup:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGUSER: lightcc
+      PGDATABASE: lightcc
+      PGPASSWORD: "${POSTGRES_PASSWORD:-lightcc}"
+      RETENTION_DAYS: "${BACKUP_RETENTION_DAYS:-14}"
+    volumes:
+      - ./backups:/backups
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -eu
+        echo "postgres-backup: starting. Retention: $${RETENTION_DAYS} days."
+        while :; do
+          ts=$$(date -u +%Y%m%dT%H%M%SZ)
+          out="/backups/lightcc-$${ts}.sql.gz"
+          echo "postgres-backup: dumping -> $${out}"
+          if pg_dump --clean --if-exists | gzip -9 > "$${out}.tmp"; then
+            mv "$${out}.tmp" "$${out}"
+            echo "postgres-backup: ok"
+          else
+            echo "postgres-backup: FAILED" >&2
+            rm -f "$${out}.tmp"
+          fi
+          # Rotate
+          find /backups -name 'lightcc-*.sql.gz' -type f -mtime +$${RETENTION_DAYS} -delete || true
+          # Next run in 24h
+          sleep 86400
+        done
+
+volumes:
+  caddy-data:
+  caddy-config:

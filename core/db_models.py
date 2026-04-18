@@ -156,7 +156,15 @@ class Memory(Base):
 
 
 class AgentDefinition(Base):
-    """First-class agent definition: reusable, configurable, possibly scheduled."""
+    """Callable agent definition: a named persona with its own system prompt,
+    tool filter, and model. Invoked via the ``Task`` tool from within a
+    conversation, or via ``POST /api/agents/run`` headlessly.
+
+    Agents do NOT have their own trigger/schedule -- that concern lives in
+    ``Schedule`` rows whose prompt references the agent by name (e.g.
+    ``/morning-briefing``). This mirrors Claude Code's model, where agents
+    are purely callable and scheduling is a separate feature.
+    """
 
     __tablename__ = "agent_definitions"
     __table_args__ = (
@@ -170,18 +178,18 @@ class AgentDefinition(Base):
     model: Mapped[str | None] = mapped_column(String(100), nullable=True)  # null = inherit default
     system_prompt: Mapped[str] = mapped_column(Text, nullable=False)
     tools: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON array of tool names (null = all)
+    # JSON array of skill names the agent composes. When set, the "Available Skills"
+    # section of the agent's system prompt is narrowed to this list, so the agent
+    # only sees its declared skills (not every globally-registered one). Invocation
+    # happens at runtime via the ``Skill`` tool. ``null`` = inherit all (legacy).
+    skills: Mapped[str | None] = mapped_column(Text, nullable=True)
     max_turns: Mapped[int] = mapped_column(Integer, default=20)
     timeout_seconds: Mapped[int] = mapped_column(Integer, default=300)
     memory_scope: Mapped[str] = mapped_column(String(20), default="user")  # "user" | "agent" | "none"
     permissions: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON
-    trigger: Mapped[str] = mapped_column(String(20), default="manual")  # "manual" | "cron" | "webhook" | "api"
-    cron_expression: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    cron_timezone: Mapped[str] = mapped_column(String(50), default="UTC", server_default="UTC")
-    webhook_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     source: Mapped[str] = mapped_column(String(20), default="user")  # "user" | "yaml"
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
 
@@ -203,6 +211,19 @@ class AgentDefinition(Base):
     def tools_list(self, value: list[str] | None) -> None:
         self.tools = json.dumps(value) if value else None
 
+    @property
+    def skills_list(self) -> list[str] | None:
+        if not self.skills:
+            return None
+        try:
+            return json.loads(self.skills)
+        except (json.JSONDecodeError, TypeError):
+            return None
+
+    @skills_list.setter
+    def skills_list(self, value: list[str] | None) -> None:
+        self.skills = json.dumps(value) if value else None
+
 
 class AgentRun(Base):
     """Execution record of an AgentDefinition."""
@@ -222,6 +243,28 @@ class AgentRun(Base):
     conversation_id: Mapped[str | None] = mapped_column(String(32), ForeignKey("conversations.id"), nullable=True)
 
     agent: Mapped["AgentDefinition"] = relationship(back_populates="runs")
+
+
+class ApiToken(Base):
+    """Long-lived personal access token for programmatic callers.
+
+    Distinct from the short-lived JWT access tokens produced by ``/api/auth/login``:
+    ApiTokens are opaque, revocable, optionally expiring, and intended for
+    scripts, webhooks, and external integrations. Stored as a SHA-256 hash;
+    the plaintext is returned to the caller exactly once, at creation.
+    """
+
+    __tablename__ = "api_tokens"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_new_id)
+    user_id: Mapped[str] = mapped_column(String(32), ForeignKey("users.id"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    prefix: Mapped[str] = mapped_column(String(16), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class AuditEvent(Base):

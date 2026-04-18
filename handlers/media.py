@@ -248,10 +248,19 @@ async def send_images_if_any(
             if p.name.endswith(".plotly.json"):
                 try:
                     chart_json = p.read_text(encoding="utf-8")
-                    json.loads(chart_json)  # validate
+                    fig = json.loads(chart_json)
+                    fig_title = ""
+                    t = (fig.get("layout") or {}).get("title")
+                    if isinstance(t, dict):
+                        fig_title = t.get("text", "")
+                    elif isinstance(t, str):
+                        fig_title = t
+                    if not fig_title:
+                        fig_title = p.stem.replace(".plotly", "").replace("_", " ").replace("-", " ").strip()
+                        fig_title = " ".join(w.capitalize() for w in fig_title.split())
                     await send_event("chart", {
                         "tool_id": tool_id,
-                        "title": p.stem.replace(".plotly", ""),
+                        "title": fig_title,
                         "plotly_json": chart_json,
                     })
                 except (json.JSONDecodeError, OSError):
@@ -291,22 +300,38 @@ async def send_chart_if_any(
     result: str,
     send_event: SendEvent,
 ) -> None:
-    """If the tool was CreateChart, send the Plotly figure JSON."""
+    """If the tool was CreateChart, send a chart payload.
+
+    D3 engine: sends a `d3_chart` event with a neutral spec.
+    Plotly engine: sends a `chart` event with the plotly figure JSON.
+    """
     from tools.registry import resolve_tool_name
     if resolve_tool_name(tool_name) != "CreateChart":
         return
     try:
         parsed = json.loads(result)
-        if parsed.get("inline"):
-            from tools.chart import get_last_figure
+        if not parsed.get("inline"):
+            return
 
-            fig = get_last_figure()
-            if fig is not None:
-                await send_event("chart", {
+        if parsed.get("engine") == "d3":
+            from tools.chart import get_last_d3_spec
+            spec = get_last_d3_spec()
+            if spec is not None:
+                await send_event("d3_chart", {
                     "tool_id": tool_id,
                     "title": parsed.get("title", "Chart"),
-                    "plotly_json": fig.to_json(),
+                    "spec": spec,
                 })
+            return
+
+        from tools.chart import get_last_figure
+        fig = get_last_figure()
+        if fig is not None:
+            await send_event("chart", {
+                "tool_id": tool_id,
+                "title": parsed.get("title", "Chart"),
+                "plotly_json": fig.to_json(),
+            })
     except (json.JSONDecodeError, ImportError):
         pass
 

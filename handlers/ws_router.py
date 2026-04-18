@@ -206,8 +206,8 @@ async def websocket_endpoint(
                 server_id = data.get("conversation_id")
             if server_id:
                 try:
-                    messages = await load_conversation(server_id)
-                    if messages is not None:
+                    messages = await load_conversation(server_id, user_id=user_id)
+                    if messages:
                         cs["messages"] = messages
                         cs["conversation_id"] = server_id
                 except Exception as e:
@@ -256,22 +256,27 @@ async def websocket_endpoint(
         if not (conv_id and cid):
             return
         try:
-            messages = await load_conversation(conv_id)
-            cs = get_or_create_conv_session(cid, session_id)
-            cs["messages"] = messages
-            cs["conversation_id"] = conv_id
             from core.db_models import Conversation as ConvModel
             from sqlalchemy import select as sql_select
             db = await get_db()
             try:
-                result = await db.execute(
-                    sql_select(ConvModel.model).where(ConvModel.id == conv_id)
-                )
-                conv_model = result.scalar_one_or_none()
-                if conv_model:
-                    cs["active_model"] = conv_model
+                owner_row = (await db.execute(
+                    sql_select(ConvModel.id, ConvModel.model).where(
+                        ConvModel.id == conv_id,
+                        ConvModel.user_id == user_id,
+                    )
+                )).first()
             finally:
                 await db.close()
+            if owner_row is None:
+                await send_event("error", {"message": "Conversation not found"}, cid=cid)
+                return
+            messages = await load_conversation(conv_id, user_id=user_id)
+            cs = get_or_create_conv_session(cid, session_id)
+            cs["messages"] = messages
+            cs["conversation_id"] = conv_id
+            if owner_row.model:
+                cs["active_model"] = owner_row.model
             render_messages = rebuild_render_messages(messages)
 
             ctx_tokens = 0
@@ -284,7 +289,7 @@ async def websocket_endpoint(
             await send_event("conversation_loaded", {
                 "conversation_id": conv_id,
                 "message_count": len(messages),
-                "model": conv_model or settings.model,
+                "model": owner_row.model or settings.model,
                 "messages": render_messages,
                 "context_tokens": ctx_tokens,
             }, cid=cid)

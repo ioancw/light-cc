@@ -1,36 +1,28 @@
-"""AgentDefinition CRUD operations -- used by REST API and scheduler."""
+"""AgentDefinition CRUD operations -- used by REST API.
+
+Agents are callable personas (no triggers, no cron). For scheduled firings,
+create a ``Schedule`` row whose prompt references the agent (``/agent-name``).
+"""
 
 from __future__ import annotations
 
 import json
 
-from croniter import croniter
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from core.database import get_db
 from core.db_models import AgentDefinition, AgentRun
-from core.scheduler import _compute_next_run
 
 
-_VALID_TRIGGERS = {"manual", "cron", "webhook", "api"}
 _VALID_MEMORY_SCOPES = {"user", "agent", "none"}
 
 
-def _validate_definition(
-    trigger: str,
-    cron_expression: str | None,
-    memory_scope: str,
-) -> None:
-    if trigger not in _VALID_TRIGGERS:
-        raise ValueError(f"Invalid trigger: {trigger}. Must be one of {sorted(_VALID_TRIGGERS)}")
+def _validate_definition(memory_scope: str) -> None:
     if memory_scope not in _VALID_MEMORY_SCOPES:
-        raise ValueError(f"Invalid memory_scope: {memory_scope}. Must be one of {sorted(_VALID_MEMORY_SCOPES)}")
-    if trigger == "cron":
-        if not cron_expression:
-            raise ValueError("cron_expression is required when trigger='cron'")
-        if not croniter.is_valid(cron_expression):
-            raise ValueError(f"Invalid cron expression: {cron_expression}")
+        raise ValueError(
+            f"Invalid memory_scope: {memory_scope}. Must be one of {sorted(_VALID_MEMORY_SCOPES)}"
+        )
 
 
 async def create_agent(
@@ -41,21 +33,14 @@ async def create_agent(
     *,
     model: str | None = None,
     tools: list[str] | None = None,
+    skills: list[str] | None = None,
     max_turns: int = 20,
     timeout_seconds: int = 300,
     memory_scope: str = "user",
     permissions: dict | None = None,
-    trigger: str = "manual",
-    cron_expression: str | None = None,
-    cron_timezone: str = "UTC",
-    webhook_url: str | None = None,
 ) -> AgentDefinition:
     """Create a new agent definition. Raises ValueError for invalid input or duplicate name."""
-    _validate_definition(trigger, cron_expression, memory_scope)
-
-    next_run_at = None
-    if trigger == "cron" and cron_expression:
-        next_run_at = _compute_next_run(cron_expression, user_tz=cron_timezone)
+    _validate_definition(memory_scope)
 
     db = await get_db()
     try:
@@ -66,17 +51,13 @@ async def create_agent(
             system_prompt=system_prompt,
             model=model,
             tools=json.dumps(tools) if tools is not None else None,
+            skills=json.dumps(skills) if skills is not None else None,
             max_turns=max_turns,
             timeout_seconds=timeout_seconds,
             memory_scope=memory_scope,
             permissions=json.dumps(permissions) if permissions else None,
-            trigger=trigger,
-            cron_expression=cron_expression,
-            cron_timezone=cron_timezone,
-            webhook_url=webhook_url,
             enabled=True,
             source="user",
-            next_run_at=next_run_at,
         )
         db.add(agent)
         try:
@@ -129,8 +110,7 @@ async def get_agent_by_name(name: str, user_id: str) -> AgentDefinition | None:
 
 async def update_agent(agent_id: str, user_id: str, **kwargs) -> AgentDefinition | None:
     """Update an agent definition. Fields: name, description, model, system_prompt,
-    tools, max_turns, timeout_seconds, memory_scope, permissions, trigger,
-    cron_expression, cron_timezone, webhook_url, enabled.
+    tools, max_turns, timeout_seconds, memory_scope, permissions, enabled.
     """
     db = await get_db()
     try:
@@ -143,24 +123,17 @@ async def update_agent(agent_id: str, user_id: str, **kwargs) -> AgentDefinition
         if not agent:
             return None
 
-        # Apply updates
         for key, value in kwargs.items():
             if key == "tools":
                 agent.tools = json.dumps(value) if value is not None else None
+            elif key == "skills":
+                agent.skills = json.dumps(value) if value is not None else None
             elif key == "permissions":
                 agent.permissions = json.dumps(value) if value else None
             elif hasattr(agent, key):
                 setattr(agent, key, value)
 
-        # Revalidate after update
-        _validate_definition(agent.trigger, agent.cron_expression, agent.memory_scope)
-
-        # Recompute next_run_at if trigger/cron/timezone changed or we toggled enabled
-        if agent.trigger == "cron" and agent.cron_expression and agent.enabled:
-            if any(k in kwargs for k in ("cron_expression", "cron_timezone", "trigger", "enabled")):
-                agent.next_run_at = _compute_next_run(agent.cron_expression, user_tz=agent.cron_timezone)
-        elif agent.trigger != "cron":
-            agent.next_run_at = None
+        _validate_definition(agent.memory_scope)
 
         await db.commit()
         await db.refresh(agent)
@@ -190,7 +163,6 @@ async def delete_agent(agent_id: str, user_id: str) -> bool:
 async def get_agent_runs(agent_id: str, user_id: str, limit: int = 20) -> list[AgentRun]:
     db = await get_db()
     try:
-        # Verify ownership first
         owner_stmt = select(AgentDefinition.id).where(
             AgentDefinition.id == agent_id,
             AgentDefinition.user_id == user_id,

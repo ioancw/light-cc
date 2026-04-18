@@ -85,21 +85,31 @@ class Settings(BaseModel):
     # Each entry: {"label": "display text", "prompt": "actual message sent"}
     # If prompt starts with "/" it invokes the matching skill/command.
     # Model routing: classify input and direct to different models for cost/latency optimization.
-    # Disabled by default. Each rule: {"pattern": "regex on user message", "model": "model-id"}
-    # First match wins. No match = default model.
+    # Modes:
+    #   "off"   -- never route; always use settings.model
+    #   "regex" -- pattern-match rules; first match wins (cheap, deterministic, dumb)
+    #   "llm"   -- Haiku classifies into Haiku/Sonnet/Opus tiers; regex rules run first as a fast path
+    # None means "unset" -- the validator honors the legacy routing_enabled flag
+    # in that case. An explicit "off" disables routing even if routing_enabled=True.
+    routing_mode: str | None = None
+    # Legacy alias: if True and routing_mode is unset, implies routing_mode="regex".
     routing_enabled: bool = False
+    # Model used as the LLM router when routing_mode="llm".
+    routing_classifier_model: str = "claude-haiku-4-5-20251001"
+    # Which model to dispatch to per tier label from the classifier.
+    routing_tier_models: dict[str, str] = Field(default_factory=lambda: {
+        "TRIVIAL":  "claude-haiku-4-5-20251001",
+        "STANDARD": "claude-sonnet-4-6",
+        "COMPLEX":  "claude-opus-4-6",
+    })
+    # Mirrors config.yaml defaults -- keep in sync. Only the Haiku fast path is
+    # safe to regex-match. Greedy Opus patterns were removed because they pulled
+    # ordinary requests into the most expensive tier; the llm classifier handles
+    # tier selection when enabled.
     routing_rules: list[dict[str, str]] = Field(default_factory=lambda: [
-        # Tier 1: Haiku -- greetings, simple questions, acknowledgements
         {"pattern": r"^(hello|hi|hey|thanks|thank you|good morning|good afternoon)\b", "model": "claude-haiku-4-5-20251001"},
         {"pattern": r"^(what time|what date|what day)\b", "model": "claude-haiku-4-5-20251001"},
         {"pattern": r"^(yes|no|ok|sure|got it|sounds good|perfect)\b", "model": "claude-haiku-4-5-20251001"},
-        # Tier 3: Opus -- complex multi-step work, architecture, deep analysis
-        {"pattern": r"(refactor|redesign|rearchitect|rewrite)\b", "model": "claude-opus-4-6"},
-        {"pattern": r"(review|audit|evaluate|assess)\s+(the |this |my )?(code|codebase|architecture|system)", "model": "claude-opus-4-6"},
-        {"pattern": r"(create|write|build|design)\s+(a |an )?(plan|architecture|strategy|spec)", "model": "claude-opus-4-6"},
-        {"pattern": r"(research|compare|investigate|deep.?dive)", "model": "claude-opus-4-6"},
-        {"pattern": r"(implement|build|create)\b.{0,40}(system|module|feature|service|api)\b", "model": "claude-opus-4-6"},
-        # Tier 2: Sonnet -- everything else (default, no rule needed)
     ])
     suggestions: list[dict[str, str]] = Field(default_factory=lambda: [
         {"label": "Top business stories", "prompt": "/morning-briefing"},
@@ -107,6 +117,16 @@ class Settings(BaseModel):
         {"label": "Analyze a dataset", "prompt": "/analyze Upload a CSV to explore"},
         {"label": "What can you do?", "prompt": "What tools and skills do you have available? Give me a summary of your capabilities."},
     ])
+
+    @model_validator(mode="after")
+    def _normalize_routing(self) -> "Settings":
+        mode = (self.routing_mode or "").lower()
+        if mode in ("off", "regex", "llm"):
+            self.routing_mode = mode
+            return self
+        # Unset or unknown: honor legacy routing_enabled, else default off.
+        self.routing_mode = "regex" if self.routing_enabled else "off"
+        return self
 
     @model_validator(mode="after")
     def _check_jwt_secret(self) -> "Settings":
@@ -126,10 +146,25 @@ class Settings(BaseModel):
 
 def load_settings() -> Settings:
     config_path = _PROJECT_ROOT / "config.yaml"
+    raw: dict[str, Any] = {}
     if config_path.exists():
-        raw: dict[str, Any] = yaml.safe_load(config_path.read_text()) or {}
-        return Settings(**raw)
-    return Settings()
+        raw = yaml.safe_load(config_path.read_text()) or {}
+
+    # Env vars ALWAYS win over config.yaml for secrets/infra so a deployed
+    # container can override dev defaults without re-baking the image.
+    for env_name, key in (
+        ("DATABASE_URL", "database_url"),
+        ("REDIS_URL", "redis_url"),
+        ("JWT_SECRET", "jwt_secret"),
+        ("TAVILY_API_KEY", "tavily_api_key"),
+        ("S3_BUCKET", "s3_bucket"),
+        ("S3_REGION", "s3_region"),
+    ):
+        val = os.environ.get(env_name)
+        if val:
+            raw[key] = val
+
+    return Settings(**raw)
 
 
 settings = load_settings()

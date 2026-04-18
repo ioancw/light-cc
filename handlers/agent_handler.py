@@ -448,7 +448,7 @@ async def handle_user_message(
         active_model = matched_skill.model
     if not active_model:
         from core.router import select_model
-        active_model = select_model(data["text"])
+        active_model = await select_model(data["text"], user_id=user_id, cid=cid)
 
     try:
         async with async_trace_span("agent.handle_message", user_id=user_id, cid=cid):

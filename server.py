@@ -22,8 +22,9 @@ from core.redis_store import init_redis, shutdown_redis
 from core.log_context import setup_logging
 from core.telemetry import setup_telemetry
 from core.hooks import load_hooks
-from commands.registry import list_commands, load_commands
-from skills.registry import list_skills, load_skills
+from core.system_prompt import DEFAULT_OUTPUTS_DIR, build_system_prompt
+from commands.registry import load_commands
+from skills.registry import load_skills
 from handlers.commands import set_project_root
 from handlers.ws_router import websocket_endpoint
 
@@ -36,6 +37,7 @@ from routes.schedules import router as schedules_router
 from routes.agents import router as agents_router
 from routes.memory import router as memory_router
 from routes.plugins import router as plugins_router
+from routes.api_tokens import router as api_tokens_router
 
 import tools  # noqa: F401 — triggers tool registration
 
@@ -56,164 +58,6 @@ for commands_dir in settings.paths.commands_dirs:
     if not resolved.is_absolute():
         resolved = _PROJECT_ROOT / resolved
     load_commands(resolved)
-
-# ─── System prompt ───
-import platform as _platform
-import sys as _sys
-
-_os_info = f"{_platform.system()} {_platform.release()}"
-_python_info = _sys.executable
-_outputs_dir = _PROJECT_ROOT / "data" / "outputs"
-_outputs_dir.mkdir(parents=True, exist_ok=True)
-
-BASE_SYSTEM_PROMPT = f"""You are Light CC, a helpful AI assistant with access to the local machine. \
-You can execute shell commands, run Python scripts, read/write files, and perform data processing, \
-visualization, and general tasks. You have real access to the file system — use your tools.
-
-Environment: {_os_info} | Python: {_python_info}
-Output directory: {_outputs_dir} (always use this for saving generated files)
-
-Guidelines:
-- For Python code, prefer the python_exec tool — it runs scripts as .py files and avoids \
-shell quoting issues.
-- For simple charts, use the create_chart tool (supports bar, line, scatter, histogram, box, \
-area, pie, heatmap, violin, treemap, sunburst, funnel, waterfall, radar, sankey, candlestick, gauge).
-- For complex/custom charts via python_exec, save as *.plotly.json for interactive rendering \
-(e.g. `fig.write_json(path)`) or *.png for static. Interactive is preferred.
-- For D3.js or custom HTML visualizations, use `from tools.d3_theme import wrap_d3` to wrap D3 \
-scripts in themed HTML, save as *.html, and print the path. The UI renders HTML files in sandboxed \
-iframes inline.
-- Chart style rules (apply to ALL plots, Plotly / matplotlib / seaborn / D3):
-  1. One chart = one idea. If you need to compare two things, one figure with two traces beats \
-two subplots. Use a subplot only if axes genuinely differ; cap subplots at 2.
-  2. Do not build infographics. No text callout boxes, equations, multi-line commentary, or \
-"key insight" labels inside the figure. Put that content in your chat message instead.
-  3. Keep annotations minimal — at most 2 short labels, each under 10 words.
-  4. Do not set `template` on Plotly figures and do not use `plt.style.use(...)` on matplotlib. \
-The UI applies its own theme and strips any template you set.
-  5. Short title, axis labels, legend. That is usually all.
-- The UI auto-renders images, Plotly charts, HTML files, and CSV files from tool output — \
-print file paths to stdout and they'll render inline. Don't re-read or re-display files you just created.
-- Always save output files to the output directory above. Never use /tmp/ or guess user directories.
-- Keep responses concise unless the user asks for detail.
-- Keep a professional tone. Do not use emojis in responses.
-- Prior tool results (web_fetch, python_exec, etc.) are in the conversation history. \
-When the user asks follow-up questions, check your prior tool results before claiming \
-you have no data. If you previously fetched or processed data, reuse it or run python_exec \
-to query it — do not ask the user to re-provide it.
-- For data analysis follow-ups (filtering, counting, aggregating), use python_exec to \
-compute the answer rather than trying to parse raw text in context.
-
-Tool selection guide (use the right tool for the job):
-- Read a file: use Read (not bash cat/head/tail)
-- Edit a file: use Edit for targeted changes, Write only for new files or complete rewrites
-- Search file contents: use Grep (not bash grep/rg)
-- Find files by name/pattern: use Glob (not bash find/ls)
-- Run Python code: use PythonExec (not bash python -c) — avoids shell quoting issues
-- Fetch a web page: use WebFetch (external URLs only, never localhost)
-- Search the web: use WebSearch, then WebFetch to read full pages from results
-- Run shell commands (git, curl, npm, etc.): use Bash
-- Multi-step complex tasks: use Agent to spawn a sub-agent
-- Iterative quality improvement: use EvalOptimize (generator-evaluator loop)
-- Data analysis: use LoadData to load files, then QueryData for pandas operations, \
-or CreateChart for quick visualizations
-When multiple tools could work, prefer the specialized tool over Bash — specialized tools \
-provide better structured output and are safer (sandboxed, validated).
-
-Tool usage rules:
-- WebFetch is ONLY for external HTTP/HTTPS URLs on the public internet. NEVER use WebFetch \
-for local files (file://), localhost, or 127.0.0.1 — it will be blocked. Use Read or \
-Bash with curl to access local files and local services.
-- Scheduled tasks are managed via the /schedule command, NOT via the OS task scheduler. \
-Use `/schedule list` to view (shows short IDs), `/schedule delete <name|id>` to remove, \
-`/schedule enable|disable <name|id>` to toggle, `/schedule run <name|id>` to trigger immediately. \
-You can reference schedules by name or short ID prefix. Never suggest Windows Task Scheduler, \
-cron, or other OS-level scheduling — all scheduling is handled internally.
-- For local API endpoints or services, use Bash with curl, not WebFetch.
-
-Error handling:
-- If a tool returns an error, read the error message carefully before retrying.
-- If a file doesn't exist, check the path with Glob before assuming it was deleted.
-- If Edit fails with "not found", verify the exact content with Read first.
-- If WebFetch fails, try WebSearch to find an alternative URL.
-- Do not retry the same failing command more than twice — diagnose the issue first.
-
-Model: {settings.model}
-"""
-
-
-def _build_system_prompt(
-    skill_prompt: str | None = None,
-    memory_context: str | None = None,
-    user_system_prompt: str | None = None,
-    project_config: str | None = None,
-    rules_text: str | None = None,
-    outputs_dir: str | None = None,
-    available_agents: list[tuple[str, str]] | None = None,
-) -> str:
-    base = BASE_SYSTEM_PROMPT
-    if outputs_dir:
-        base = base.replace(str(_outputs_dir), str(outputs_dir))
-    parts = [base]
-    if project_config:
-        parts.append(f"\n## Project Instructions\n{project_config}")
-    if rules_text:
-        parts.append(f"\n## Project Rules\n{rules_text}")
-    if user_system_prompt:
-        parts.append(f"\n## User Instructions\n{user_system_prompt}")
-    if skill_prompt:
-        parts.append(f"\n## Active Skill\n{skill_prompt}")
-    if memory_context:
-        parts.append(
-            f"\n## Your Memory\nThe following are things you remember about this user:\n{memory_context}"
-        )
-    skills = list_skills()
-    visible_skills = [s for s in skills if s.user_invocable and not s.disable_model_invocation]
-    auto_activated = [s for s in skills if not s.disable_model_invocation]
-
-    if visible_skills:
-        lines = []
-        for s in visible_skills:
-            hint = f" {s.argument_hint}" if s.argument_hint else ""
-            lines.append(f"- /{s.name}{hint}: {s.description}")
-        parts.append(f"\n## Available Skills\nUsers can invoke these with /name:\n" + "\n".join(lines))
-
-    if auto_activated:
-        names = ", ".join(s.name for s in auto_activated)
-        parts.append(
-            f"\n## Auto-Activated Skills\nThese activate automatically based on conversation context: {names}"
-        )
-
-    commands = list_commands()
-    if commands:
-        cmd_lines = []
-        for c in commands:
-            hint = f" {c.argument_hint}" if c.argument_hint else ""
-            cmd_lines.append(f"- /{c.name}{hint}: {c.description}")
-        parts.append(f"\n## Available Commands\n" + "\n".join(cmd_lines))
-
-    if available_agents:
-        agent_lines = [f"- **{name}** -- {desc}" for name, desc in available_agents]
-        parts.append(
-            "\n## Available Agents\n"
-            "The user has configured the specialist agents below. When an "
-            "incoming request matches one of their descriptions, you MUST "
-            "delegate to that agent via the `Agent` tool rather than perform "
-            "the task inline with raw tools like WebSearch, WebFetch, Read, "
-            "or Write. The user set these agents up precisely so you would "
-            "route to them -- bypassing them produces inconsistent, "
-            "unstructured output.\n\n"
-            "To delegate: call `Agent(agent_type=\"<agent-name>\", "
-            "prompt=\"<task details>\")`. Pass the full user request, plus "
-            "any context you have, as `prompt`. Do not paraphrase or "
-            "summarize the task before handing off.\n\n"
-            "Only handle a request inline if NO listed agent fits. When in "
-            "doubt between two agents, pick the more specific one.\n\n"
-            "Agents available to this user:\n" + "\n".join(agent_lines)
-        )
-
-    return "\n".join(parts)
-
 
 # ─── FastAPI lifespan (startup + shutdown) ───
 @asynccontextmanager
@@ -363,6 +207,7 @@ app.include_router(schedules_router)
 app.include_router(agents_router)
 app.include_router(memory_router)
 app.include_router(plugins_router)
+app.include_router(api_tokens_router)
 app.mount("/static", StaticFiles(directory=str(_PROJECT_ROOT / "static")), name="static")
 
 _SVELTE_DIST = _PROJECT_ROOT / "frontend" / "dist"
@@ -476,8 +321,8 @@ async def login_page():
 async def ws_endpoint(ws: WebSocket):
     await websocket_endpoint(
         ws,
-        build_system_prompt=_build_system_prompt,
-        outputs_dir=_outputs_dir,
+        build_system_prompt=build_system_prompt,
+        outputs_dir=DEFAULT_OUTPUTS_DIR,
     )
 
 

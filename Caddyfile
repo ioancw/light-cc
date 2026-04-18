@@ -1,0 +1,45 @@
+# Caddy config for Light CC production deployment.
+#
+# Caddy terminates TLS and proxies all traffic to the app container.
+# Auto-obtains and renews Let's Encrypt certificates based on DOMAIN + ADMIN_EMAIL.
+
+{$DOMAIN} {
+    # Email for Let's Encrypt account + renewal reminders
+    tls {$ADMIN_EMAIL}
+
+    # gzip + zstd where supported
+    encode zstd gzip
+
+    # Basic hardening headers
+    header {
+        # HSTS: 1 year, include subdomains. Remove includeSubDomains if you host
+        # subdomains that are NOT on HTTPS.
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "SAMEORIGIN"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        # Remove the Caddy server banner
+        -Server
+    }
+
+    # WebSocket endpoint -- needs Connection: Upgrade
+    @websocket {
+        header Connection *Upgrade*
+        header Upgrade websocket
+    }
+    reverse_proxy @websocket app:8000
+
+    # Everything else
+    reverse_proxy app:8000 {
+        # Preserve client IP for the app's logs / rate limits
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+
+    # Access logs to stdout (docker logs caddy); tune as needed
+    log {
+        output stdout
+        format json
+    }
+}

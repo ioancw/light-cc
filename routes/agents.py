@@ -1,4 +1,12 @@
-"""AgentDefinition CRUD endpoints."""
+"""AgentDefinition CRUD + run endpoints.
+
+Agents are callable personas. Invocation paths:
+- ``POST /api/agents/{id}/run``      -- async background run (returns 202 + run_id)
+- ``POST /api/agents/run``           -- async background run by name (returns 202)
+- ``POST /api/agents/run/sync``      -- synchronous headless run; blocks until
+  the agent completes and returns its full output. This is the entry point
+  for CC → Light CC integration and other external automation.
+"""
 
 from __future__ import annotations
 
@@ -27,20 +35,33 @@ class RunByNameRequest(BaseModel):
     name: str
 
 
+class SyncRunRequest(BaseModel):
+    """Body for the synchronous /api/agents/run/sync endpoint."""
+    name: str
+    prompt: str
+
+
+class SyncRunResponse(BaseModel):
+    """Full result of a synchronous agent run."""
+    run_id: str
+    status: str
+    result: str | None
+    error: str | None
+    tokens_used: int
+    conversation_id: str | None
+
+
 class CreateAgentRequest(BaseModel):
     name: str
     description: str
     system_prompt: str
     model: str | None = None
     tools: list[str] | None = None
+    skills: list[str] | None = None
     max_turns: int = 20
     timeout_seconds: int = 300
     memory_scope: str = "user"
     permissions: dict | None = None
-    trigger: str = "manual"
-    cron_expression: str | None = None
-    cron_timezone: str = "UTC"
-    webhook_url: str | None = None
 
 
 class UpdateAgentRequest(BaseModel):
@@ -49,14 +70,11 @@ class UpdateAgentRequest(BaseModel):
     system_prompt: str | None = None
     model: str | None = None
     tools: list[str] | None = None
+    skills: list[str] | None = None
     max_turns: int | None = None
     timeout_seconds: int | None = None
     memory_scope: str | None = None
     permissions: dict | None = None
-    trigger: str | None = None
-    cron_expression: str | None = None
-    cron_timezone: str | None = None
-    webhook_url: str | None = None
     enabled: bool | None = None
 
 
@@ -67,18 +85,14 @@ class AgentResponse(BaseModel):
     system_prompt: str
     model: str | None
     tools: list[str] | None
+    skills: list[str] | None
     max_turns: int
     timeout_seconds: int
     memory_scope: str
     permissions: dict | None
-    trigger: str
-    cron_expression: str | None
-    cron_timezone: str
-    webhook_url: str | None
     enabled: bool
     source: str
     last_run_at: str | None
-    next_run_at: str | None
     created_at: str
 
 
@@ -103,18 +117,14 @@ def _to_response(agent) -> AgentResponse:
         system_prompt=agent.system_prompt,
         model=agent.model,
         tools=agent.tools_list,
+        skills=agent.skills_list,
         max_turns=agent.max_turns,
         timeout_seconds=agent.timeout_seconds,
         memory_scope=agent.memory_scope,
         permissions=_parse_json(agent.permissions),
-        trigger=agent.trigger,
-        cron_expression=agent.cron_expression,
-        cron_timezone=agent.cron_timezone or "UTC",
-        webhook_url=agent.webhook_url,
         enabled=agent.enabled,
         source=agent.source,
         last_run_at=agent.last_run_at.isoformat() if agent.last_run_at else None,
-        next_run_at=agent.next_run_at.isoformat() if agent.next_run_at else None,
         created_at=agent.created_at.isoformat(),
     )
 
@@ -162,14 +172,11 @@ async def api_create_agent(req: CreateAgentRequest, user: User = Depends(get_cur
             system_prompt=req.system_prompt,
             model=req.model,
             tools=req.tools,
+            skills=req.skills,
             max_turns=req.max_turns,
             timeout_seconds=req.timeout_seconds,
             memory_scope=req.memory_scope,
             permissions=req.permissions,
-            trigger=req.trigger,
-            cron_expression=req.cron_expression,
-            cron_timezone=req.cron_timezone,
-            webhook_url=req.webhook_url,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -230,6 +237,14 @@ async def api_get_agent_run(
     return _run_to_response(run)
 
 
+async def _gate_agent_run(user_id: str) -> None:
+    """Enforce per-user rate limits on the external agent-run surface."""
+    from core.rate_limit import check_rate_limit_async
+    allowed, reason = await check_rate_limit_async(user_id, "agent_run")
+    if not allowed:
+        raise HTTPException(status_code=429, detail=reason)
+
+
 @router.post("/{agent_id}/run", response_model=AgentRunResponse, status_code=202)
 async def api_trigger_agent_run(agent_id: str, user: User = Depends(get_current_user)):
     """Trigger a manual run of the agent. Returns the AgentRun immediately (run executes in background)."""
@@ -239,6 +254,7 @@ async def api_trigger_agent_run(agent_id: str, user: User = Depends(get_current_
         raise HTTPException(status_code=404, detail="Agent not found")
     if not agent.enabled:
         raise HTTPException(status_code=400, detail="Agent is disabled")
+    await _gate_agent_run(user.id)
     try:
         run = await trigger_agent_run(agent, trigger_type="manual")
     except Exception as e:
@@ -250,20 +266,54 @@ async def api_trigger_agent_run(agent_id: str, user: User = Depends(get_current_
 async def api_trigger_agent_run_by_name(
     req: RunByNameRequest, user: User = Depends(get_current_user),
 ):
-    """Programmatic trigger: look up an agent by name and start a run.
-
-    Useful for scripts and integrations that know the agent by name rather
-    than id. The resulting AgentRun is always labelled ``trigger_type="api"``
-    so these calls are distinguishable from UI-driven manual runs.
-    """
+    """Async: look up an agent by name and enqueue a run. Returns 202 + run record."""
     from core.agent_runner import trigger_agent_run
     agent = await get_agent_by_name(req.name, user.id)
     if not agent:
         raise HTTPException(status_code=404, detail=f"Agent '{req.name}' not found")
     if not agent.enabled:
         raise HTTPException(status_code=400, detail="Agent is disabled")
+    await _gate_agent_run(user.id)
     try:
         run = await trigger_agent_run(agent, trigger_type="api")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to trigger run: {e}")
     return _run_to_response(run)
+
+
+@router.post("/run/sync", response_model=SyncRunResponse)
+async def api_run_agent_sync(
+    req: SyncRunRequest, user: User = Depends(get_current_user),
+):
+    """Synchronous headless execution. Blocks until the agent completes.
+
+    The primary external-integration entry point — a CC session (or any
+    other system) can POST ``{name, prompt}`` and receive the agent's
+    full output in the response body. Runs with persistence + webhook
+    side effects, same as the async path; the difference is the caller
+    gets the result inline instead of polling.
+    """
+    from core.agent_runner import run_agent_once
+    agent = await get_agent_by_name(req.name, user.id)
+    if not agent:
+        raise HTTPException(status_code=404, detail=f"Agent '{req.name}' not found")
+    if not agent.enabled:
+        raise HTTPException(status_code=400, detail="Agent is disabled")
+    await _gate_agent_run(user.id)
+    try:
+        result = await run_agent_once(
+            agent, req.prompt,
+            trigger_type="api",
+            persist_conversation=True,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Agent run failed: {e}")
+
+    return SyncRunResponse(
+        run_id=result.run_id,
+        status=result.status,
+        result=result.result_text,
+        error=result.error,
+        tokens_used=result.tokens_used,
+        conversation_id=result.conversation_id,
+    )

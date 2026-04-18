@@ -196,6 +196,9 @@ def mock_anthropic_client():
 
     client.messages.stream = MagicMock(side_effect=_make_stream)
 
+    # Ensure core.agent is importable before patch.object resolves the target.
+    import core.agent  # noqa: F401
+
     with patch("core.agent.get_client", return_value=client):
         yield client, set_responses
 

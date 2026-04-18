@@ -54,6 +54,14 @@ _LIMITS = {
     "message": {"capacity": 15, "refill_rate": 15 / 60, "window": 60},       # 15 per minute
     "message_hourly": {"capacity": 200, "refill_rate": 200 / 3600, "window": 3600},  # 200 per hour
     "tool_call": {"capacity": 60, "refill_rate": 60 / 60, "window": 60},     # 60 per minute
+    # External trigger surface: caps how fast an API caller (API token or JWT)
+    # can kick off agent runs. Cascaded minute/hour/day buckets -- the daily
+    # one acts as a crude per-user quota to bound runaway cost.
+    "agent_run": {"capacity": 10, "refill_rate": 10 / 60, "window": 60},           # 10 per minute
+    "agent_run_hourly": {"capacity": 100, "refill_rate": 100 / 3600, "window": 3600},  # 100 per hour
+    "agent_run_daily": {"capacity": 500, "refill_rate": 500 / 86400, "window": 86400}, # 500 per day
+    # API token creation: low burst tolerance; most users create tokens rarely.
+    "token_create": {"capacity": 5, "refill_rate": 5 / 3600, "window": 3600},     # 5 per hour
 }
 
 # Per-tool rate limits — tools not listed here use the default "tool_call" bucket
@@ -160,6 +168,28 @@ def check_rate_limit(user_id: str, action: str, *, tool_name: str | None = None)
             return False, f"Rate limit exceeded: too many tool calls. Try again in {retry:.0f}s."
         return True, ""
 
+    elif action == "agent_run":
+        minute_bucket = buckets["agent_run"]
+        hourly_bucket = buckets["agent_run_hourly"]
+        daily_bucket = buckets["agent_run_daily"]
+        if not minute_bucket.consume():
+            retry = minute_bucket.retry_after
+            return False, f"Rate limit exceeded: too many agent runs. Try again in {retry:.0f}s."
+        if not hourly_bucket.consume():
+            retry = hourly_bucket.retry_after
+            return False, f"Hourly agent run limit reached. Try again in {retry:.0f}s."
+        if not daily_bucket.consume():
+            retry = daily_bucket.retry_after
+            return False, f"Daily agent run quota reached. Try again in {retry / 3600:.1f}h."
+        return True, ""
+
+    elif action == "token_create":
+        bucket = buckets["token_create"]
+        if not bucket.consume():
+            retry = bucket.retry_after
+            return False, f"Token creation limit reached. Try again in {retry / 60:.0f}m."
+        return True, ""
+
     return True, ""
 
 
@@ -199,6 +229,27 @@ async def check_rate_limit_async(user_id: str, action: str, *, tool_name: str | 
         allowed, retry = await _redis_check(key, cfg["capacity"], cfg["window"])
         if not allowed:
             return False, f"Rate limit exceeded: too many tool calls. Try again in {retry:.0f}s."
+        return True, ""
+
+    elif action == "agent_run":
+        for sub, fmt in (
+            ("agent_run", "Rate limit exceeded: too many agent runs. Try again in {retry:.0f}s."),
+            ("agent_run_hourly", "Hourly agent run limit reached. Try again in {retry:.0f}s."),
+            ("agent_run_daily", "Daily agent run quota reached. Try again in {retry_hours:.1f}h."),
+        ):
+            cfg = _LIMITS[sub]
+            key = f"lcc:rl:{user_id}:{sub}"
+            allowed, retry = await _redis_check(key, cfg["capacity"], cfg["window"])
+            if not allowed:
+                return False, fmt.format(retry=retry, retry_hours=retry / 3600)
+        return True, ""
+
+    elif action == "token_create":
+        cfg = _LIMITS["token_create"]
+        key = f"lcc:rl:{user_id}:token_create"
+        allowed, retry = await _redis_check(key, cfg["capacity"], cfg["window"])
+        if not allowed:
+            return False, f"Token creation limit reached. Try again in {retry / 60:.0f}m."
         return True, ""
 
     return True, ""

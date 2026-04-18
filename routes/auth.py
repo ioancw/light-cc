@@ -85,10 +85,21 @@ class RefreshRequest(BaseModel):
 # ── Dependency ────────────────────────────────────────────────────────
 
 async def get_current_user(creds: HTTPAuthorizationCredentials = Depends(_bearer)) -> User:
-    payload = decode_token(creds.credentials)
+    raw = creds.credentials
+
+    # Long-lived API token path (opaque, revocable, no refresh flow).
+    if raw.startswith("lcc_"):
+        from core.api_tokens import verify_api_token
+        user = await verify_api_token(raw)
+        if user is None:
+            raise HTTPException(status_code=401, detail="Invalid or revoked API token")
+        return user
+
+    # JWT access token path (interactive sessions).
+    payload = decode_token(raw)
     if payload is None or payload.get("type") != "access":
         raise HTTPException(status_code=401, detail="Invalid or expired token")
-    if await is_token_revoked(creds.credentials):
+    if await is_token_revoked(raw):
         raise HTTPException(status_code=401, detail="Token has been revoked")
     db = await get_db()
     try:

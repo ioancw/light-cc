@@ -43,7 +43,6 @@ class TestCreateAgent:
         )
         assert agent.id
         assert agent.name == "test-agent"
-        assert agent.trigger == "manual"
         assert agent.enabled is True
         assert agent.source == "user"
         assert agent.max_turns == 20
@@ -61,19 +60,6 @@ class TestCreateAgent:
         assert agent.tools_list == ["WebSearch", "WebFetch"]
 
     @pytest.mark.asyncio
-    async def test_create_cron_sets_next_run(self, agent_db):
-        _, user = agent_db
-        agent = await create_agent(
-            user_id=user.id,
-            name="cron-agent",
-            description="d",
-            system_prompt="p",
-            trigger="cron",
-            cron_expression="0 * * * *",
-        )
-        assert agent.next_run_at is not None
-
-    @pytest.mark.asyncio
     async def test_create_rejects_duplicate_name(self, agent_db):
         _, user = agent_db
         await create_agent(
@@ -82,33 +68,6 @@ class TestCreateAgent:
         with pytest.raises(ValueError, match="already exists"):
             await create_agent(
                 user_id=user.id, name="dup", description="d", system_prompt="p",
-            )
-
-    @pytest.mark.asyncio
-    async def test_create_rejects_bad_cron(self, agent_db):
-        _, user = agent_db
-        with pytest.raises(ValueError, match="Invalid cron"):
-            await create_agent(
-                user_id=user.id, name="bad", description="d", system_prompt="p",
-                trigger="cron", cron_expression="not a cron",
-            )
-
-    @pytest.mark.asyncio
-    async def test_create_cron_requires_expression(self, agent_db):
-        _, user = agent_db
-        with pytest.raises(ValueError, match="required"):
-            await create_agent(
-                user_id=user.id, name="no-cron", description="d", system_prompt="p",
-                trigger="cron",
-            )
-
-    @pytest.mark.asyncio
-    async def test_create_rejects_bad_trigger(self, agent_db):
-        _, user = agent_db
-        with pytest.raises(ValueError, match="Invalid trigger"):
-            await create_agent(
-                user_id=user.id, name="bt", description="d", system_prompt="p",
-                trigger="nonsense",
             )
 
     @pytest.mark.asyncio
@@ -173,35 +132,20 @@ class TestUpdate:
         assert updated.tools_list == ["Read", "Write"]
 
     @pytest.mark.asyncio
-    async def test_update_to_cron_computes_next_run(self, agent_db):
+    async def test_update_disable(self, agent_db):
         _, user = agent_db
         agent = await create_agent(
             user_id=user.id, name="u3", description="d", system_prompt="p",
         )
-        assert agent.next_run_at is None
-        updated = await update_agent(
-            agent.id, user.id,
-            trigger="cron", cron_expression="0 * * * *",
-        )
-        assert updated.next_run_at is not None
+        assert agent.enabled is True
+        updated = await update_agent(agent.id, user.id, enabled=False)
+        assert updated.enabled is False
 
     @pytest.mark.asyncio
     async def test_update_nonexistent_returns_none(self, agent_db):
         _, user = agent_db
         result = await update_agent("nope", user.id, description="x")
         assert result is None
-
-    @pytest.mark.asyncio
-    async def test_update_bad_cron_raises(self, agent_db):
-        _, user = agent_db
-        agent = await create_agent(
-            user_id=user.id, name="u4", description="d", system_prompt="p",
-            trigger="cron", cron_expression="0 * * * *",
-        )
-        with pytest.raises(ValueError):
-            await update_agent(
-                agent.id, user.id, cron_expression="garbage",
-            )
 
 
 class TestDelete:

@@ -1,23 +1,25 @@
-"""Parse first-class AgentDefinition files from agents/<name>/AGENT.md.
+"""Parse callable AgentDefinition files from ``agents/<name>/AGENT.md``.
 
 YAML frontmatter + markdown body pattern (mirrors skills/loader.py).
 
 Frontmatter schema:
     ---
-    name: morning-briefing          # required, unique per user
+    name: person-research           # required, unique per user
     description: ...                # required, short
     model: claude-sonnet-4-6        # optional, null -> inherit default
     tools: [WebSearch, WebFetch]    # optional, null -> all tools
     max-turns: 15                   # optional, default 20
     timeout: 300                    # optional, default 300
-    trigger: cron                   # manual | cron | webhook | api
-    cron: "0 8 * * 1-5"             # required if trigger=cron
-    timezone: Europe/London         # optional, default UTC
-    webhook-url: https://...        # optional
-    memory-scope: agent             # user | agent | none
+    memory-scope: user              # user | agent | none
+    enabled: true                   # optional, default true
     ---
 
-    You are a morning briefing agent. ...
+    You are a ... agent. ...
+
+Agents are callable via the ``Task`` tool (in-conversation) or the
+``POST /api/agents/run`` endpoint (headless). Scheduling lives in
+``Schedule`` rows, separate from the agent definition -- if you want a
+daily firing, create a Schedule with prompt ``/agent-name``.
 """
 
 from __future__ import annotations
@@ -25,7 +27,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -45,13 +47,10 @@ class AgentDef:
     system_prompt: str
     model: str | None = None
     tools: list[str] | None = None
+    skills: list[str] | None = None
     max_turns: int = 20
     timeout_seconds: int = 300
     memory_scope: str = "user"
-    trigger: str = "manual"
-    cron_expression: str | None = None
-    cron_timezone: str = "UTC"
-    webhook_url: str | None = None
     permissions: dict[str, Any] | None = None
     enabled: bool = True
     source_path: str = ""
@@ -96,14 +95,15 @@ def parse_agent_file(path: Path) -> AgentDef | None:
         logger.warning(f"Agent {path} missing name/description/body, skipping")
         return None
 
-    trigger = str(meta.get("trigger", "manual")).lower()
-    if trigger not in {"manual", "cron", "webhook", "api"}:
-        logger.warning(f"Agent {name}: invalid trigger '{trigger}', defaulting to manual")
-        trigger = "manual"
-
-    cron_expression = meta.get("cron") or meta.get("cron-expression")
-    if trigger == "cron" and not cron_expression:
-        logger.warning(f"Agent {name}: trigger=cron but no cron expression provided")
+    # Legacy fields that used to live here (trigger, cron, timezone, webhook-url)
+    # are silently ignored -- scheduling moved to Schedule rows.
+    for legacy_key in ("trigger", "cron", "cron-expression", "timezone",
+                       "cron-timezone", "webhook-url", "webhook_url"):
+        if legacy_key in meta:
+            logger.info(
+                f"Agent '{name}' uses legacy frontmatter key '{legacy_key}' which is now ignored. "
+                f"Scheduling lives in Schedule rows; see docs."
+            )
 
     memory_scope = str(meta.get("memory-scope") or meta.get("memory_scope") or "user").lower()
     if memory_scope not in {"user", "agent", "none"}:
@@ -119,13 +119,10 @@ def parse_agent_file(path: Path) -> AgentDef | None:
         system_prompt=body,
         model=meta.get("model") or None,
         tools=_parse_tools(meta.get("tools")),
+        skills=_parse_tools(meta.get("skills")),
         max_turns=int(meta.get("max-turns") or meta.get("max_turns") or 20),
         timeout_seconds=int(meta.get("timeout") or meta.get("timeout-seconds") or 300),
         memory_scope=memory_scope,
-        trigger=trigger,
-        cron_expression=str(cron_expression) if cron_expression else None,
-        cron_timezone=str(meta.get("timezone") or meta.get("cron-timezone") or "UTC"),
-        webhook_url=meta.get("webhook-url") or meta.get("webhook_url") or None,
         permissions=permissions,
         enabled=bool(meta.get("enabled", True)),
         source_path=str(path),
@@ -141,7 +138,6 @@ def discover_agents(agents_dir: str | Path) -> list[AgentDef]:
     agents: list[AgentDef] = []
     seen: set[str] = set()
 
-    # Directory format: agents/<name>/AGENT.md (canonical)
     for agent_md in sorted(root.glob("*/AGENT.md")):
         a = parse_agent_file(agent_md)
         if a and a.name not in seen:
@@ -190,6 +186,7 @@ async def sync_agent_defs_to_db(
                 continue
 
             tools_json = json.dumps(d.tools) if d.tools is not None else None
+            skills_json = json.dumps(d.skills) if d.skills is not None else None
             permissions_json = json.dumps(d.permissions) if d.permissions else None
 
             if existing is None:
@@ -200,14 +197,11 @@ async def sync_agent_defs_to_db(
                     model=d.model,
                     system_prompt=d.system_prompt,
                     tools=tools_json,
+                    skills=skills_json,
                     max_turns=d.max_turns,
                     timeout_seconds=d.timeout_seconds,
                     memory_scope=d.memory_scope,
                     permissions=permissions_json,
-                    trigger=d.trigger,
-                    cron_expression=d.cron_expression,
-                    cron_timezone=d.cron_timezone,
-                    webhook_url=d.webhook_url,
                     enabled=d.enabled,
                     source=source_label,
                 )
@@ -217,14 +211,11 @@ async def sync_agent_defs_to_db(
                 existing.model = d.model
                 existing.system_prompt = d.system_prompt
                 existing.tools = tools_json
+                existing.skills = skills_json
                 existing.max_turns = d.max_turns
                 existing.timeout_seconds = d.timeout_seconds
                 existing.memory_scope = d.memory_scope
                 existing.permissions = permissions_json
-                existing.trigger = d.trigger
-                existing.cron_expression = d.cron_expression
-                existing.cron_timezone = d.cron_timezone
-                existing.webhook_url = d.webhook_url
                 existing.enabled = d.enabled
                 existing.source = source_label
             synced += 1

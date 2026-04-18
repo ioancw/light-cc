@@ -52,6 +52,11 @@
     if (n === 'write') return inp.file_path ? shortenPath(inp.file_path) : '';
     if (n === 'grep') return inp.pattern ? truncate(inp.pattern, 40) : '';
     if (n === 'glob') return inp.pattern ? truncate(inp.pattern, 40) : '';
+    if (n === 'task') {
+      const sub = inp.subagent_type || 'subagent';
+      const desc = inp.description ? ` — ${truncate(inp.description, 40)}` : '';
+      return `${sub}${desc}`;
+    }
     return '';
   });
 
@@ -76,6 +81,11 @@
     }
     if (n === 'edit') return parsed.status === 'ok' ? `${parsed.replacements} replaced` : '';
     if (n === 'write') return parsed.status === 'ok' ? `${parsed.bytes}B` : '';
+    if (n === 'task') {
+      if (parsed.run_id) return `run ${parsed.run_id.slice(0, 8)}`;
+      if (parsed.agent_id) return 'delegated';
+      return 'done';
+    }
     return 'done';
   });
 
@@ -288,6 +298,28 @@
           </div>
         {/if}
         <div class="tool-meta">{parsed.replacements} replacement{parsed.replacements !== 1 ? 's' : ''} made</div>
+      </div>
+
+    <!-- Task tool: subagent delegation result -->
+    {:else if tc.name?.toLowerCase() === 'task' && parsed && (parsed.result !== undefined || parsed.agent_id)}
+      <div class="tool-section">
+        <div class="tool-section-label"><span>Delegated to {tc.input?.subagent_type || 'subagent'}</span></div>
+        {#if tc.input?.prompt}
+          <div class="tool-task-prompt">{tc.input.prompt}</div>
+        {/if}
+      </div>
+      {#if parsed.result}
+        <div class="tool-section">
+          <div class="tool-section-label">
+            <span>Response</span>
+            <button class="tool-copy-btn" onclick={(e) => { e.stopPropagation(); copyText(parsed.result); }}>copy</button>
+          </div>
+          <div class="tool-task-result" class:output-full={outputExpanded}>{parsed.result}</div>
+        </div>
+      {/if}
+      <div class="tool-meta">
+        {#if parsed.run_id}run: {parsed.run_id.slice(0, 8)}{/if}
+        {#if parsed.agent_id} · agent: {parsed.agent_id.slice(0, 8)}{/if}
       </div>
 
     <!-- Write tool: clean status -->
@@ -623,6 +655,34 @@
     content: '+ ';
     font-weight: 700;
     opacity: 0.6;
+  }
+
+  /* Task: subagent prompt + response */
+  .tool-task-prompt {
+    font-size: 11px;
+    line-height: 1.65;
+    color: var(--fg-dim);
+    white-space: pre-wrap;
+    word-break: break-word;
+    padding: 6px 10px;
+    background: var(--surface2);
+    border-left: 2px solid var(--accent-soft);
+    border-radius: 3px;
+    font-family: var(--font-ui);
+    max-height: 160px;
+    overflow-y: auto;
+  }
+  .tool-task-result {
+    font-size: 12px;
+    line-height: 1.65;
+    color: var(--fg-bright);
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: var(--font-ui);
+    max-height: 360px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border2) transparent;
   }
 
   /* Tool description (pulled from registry) */

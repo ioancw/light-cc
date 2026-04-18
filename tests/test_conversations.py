@@ -138,6 +138,64 @@ class TestForkConversation:
                 await fork_conversation("nonexistent-id", test_user.id)
 
     @pytest.mark.asyncio
+    async def test_fork_other_users_conversation_raises(self, test_db, test_user, clean_sessions):
+        """A user cannot fork another user's conversation even if they know the ID."""
+        from core.auth import hash_password
+        from core.db_models import User
+
+        create_connection("s1", user_id=test_user.id)
+        create_conv_session("c1", "s1")
+        conv_session_set("c1", "messages", [
+            {"role": "user", "content": "Confidential message"},
+        ])
+
+        with patch("core.database.get_db", return_value=test_db):
+            conv_id = await save_conversation("c1")
+
+            intruder = User(
+                email="intruder@x.com",
+                password_hash=hash_password("x"),
+                display_name="Intruder",
+            )
+            test_db.add(intruder)
+            await test_db.commit()
+            await test_db.refresh(intruder)
+
+            with pytest.raises(ValueError, match="No messages found"):
+                await fork_conversation(conv_id, intruder.id)
+
+    @pytest.mark.asyncio
+    async def test_load_conversation_scoped_by_user(self, test_db, test_user, clean_sessions):
+        """load_conversation(..., user_id=...) must return [] for non-owners."""
+        from core.auth import hash_password
+        from core.db_models import User
+
+        create_connection("s1", user_id=test_user.id)
+        create_conv_session("c1", "s1")
+        conv_session_set("c1", "messages", [
+            {"role": "user", "content": "Secret"},
+        ])
+
+        with patch("core.database.get_db", return_value=test_db):
+            conv_id = await save_conversation("c1")
+
+            intruder = User(
+                email="intruder2@x.com",
+                password_hash=hash_password("x"),
+                display_name="Intruder",
+            )
+            test_db.add(intruder)
+            await test_db.commit()
+            await test_db.refresh(intruder)
+
+            # Owner sees messages; intruder sees nothing.
+            owner_msgs = await load_conversation(conv_id, user_id=test_user.id)
+            intruder_msgs = await load_conversation(conv_id, user_id=intruder.id)
+
+        assert len(owner_msgs) == 1
+        assert intruder_msgs == []
+
+    @pytest.mark.asyncio
     async def test_fork_title_has_suffix(self, test_db, test_user, clean_sessions):
         """Forked conversation title should include (fork) suffix."""
         from core.db_models import Conversation

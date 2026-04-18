@@ -100,7 +100,6 @@ class TestCreate:
         assert resp.status_code == 201
         data = resp.json()
         assert data["name"] == "new-agent"
-        assert data["trigger"] == "manual"
         assert data["enabled"] is True
         assert data["source"] == "user"
 
@@ -123,46 +122,6 @@ class TestCreate:
         assert resp.json()["tools"] == ["WebSearch", "WebFetch"]
 
     @pytest.mark.asyncio
-    async def test_create_cron_agent(self, api_client):
-        client, _, _ = api_client
-        resp = await client.post("/api/agents", json={
-            "name": "cron1",
-            "description": "d",
-            "system_prompt": "p",
-            "trigger": "cron",
-            "cron_expression": "0 * * * *",
-        })
-        assert resp.status_code == 201
-        data = resp.json()
-        assert data["trigger"] == "cron"
-        assert data["cron_expression"] == "0 * * * *"
-        assert data["next_run_at"] is not None
-
-    @pytest.mark.asyncio
-    async def test_create_invalid_cron_returns_400(self, api_client):
-        client, _, _ = api_client
-        resp = await client.post("/api/agents", json={
-            "name": "badcron",
-            "description": "d",
-            "system_prompt": "p",
-            "trigger": "cron",
-            "cron_expression": "not a cron",
-        })
-        assert resp.status_code == 400
-        assert "cron" in resp.json()["detail"].lower()
-
-    @pytest.mark.asyncio
-    async def test_create_cron_without_expression_returns_400(self, api_client):
-        client, _, _ = api_client
-        resp = await client.post("/api/agents", json={
-            "name": "nocron",
-            "description": "d",
-            "system_prompt": "p",
-            "trigger": "cron",
-        })
-        assert resp.status_code == 400
-
-    @pytest.mark.asyncio
     async def test_create_duplicate_name_returns_400(self, api_client):
         client, _, user = api_client
         await create_agent(user_id=user.id, name="dup", description="d", system_prompt="p")
@@ -174,17 +133,6 @@ class TestCreate:
         })
         assert resp.status_code == 400
         assert "already exists" in resp.json()["detail"]
-
-    @pytest.mark.asyncio
-    async def test_create_bad_trigger_returns_400(self, api_client):
-        client, _, _ = api_client
-        resp = await client.post("/api/agents", json={
-            "name": "bt",
-            "description": "d",
-            "system_prompt": "p",
-            "trigger": "nonsense",
-        })
-        assert resp.status_code == 400
 
 
 # ── update ─────────────────────────────────────────────────────────────
@@ -219,30 +167,17 @@ class TestUpdate:
         assert resp.status_code == 404
 
     @pytest.mark.asyncio
-    async def test_update_to_cron(self, api_client):
+    async def test_update_disable(self, api_client):
         client, _, user = api_client
         agent = await create_agent(
             user_id=user.id, name="u3", description="d", system_prompt="p",
         )
 
         resp = await client.patch(f"/api/agents/{agent.id}", json={
-            "trigger": "cron",
-            "cron_expression": "0 * * * *",
+            "enabled": False,
         })
         assert resp.status_code == 200
-        assert resp.json()["next_run_at"] is not None
-
-    @pytest.mark.asyncio
-    async def test_update_bad_cron_returns_400(self, api_client):
-        client, _, user = api_client
-        agent = await create_agent(
-            user_id=user.id, name="u4", description="d", system_prompt="p",
-            trigger="cron", cron_expression="0 * * * *",
-        )
-        resp = await client.patch(f"/api/agents/{agent.id}", json={
-            "cron_expression": "garbage",
-        })
-        assert resp.status_code == 400
+        assert resp.json()["enabled"] is False
 
 
 # ── delete ─────────────────────────────────────────────────────────────
@@ -452,6 +387,48 @@ class TestTriggerRunByName:
         )
         assert resp.status_code == 202
         assert resp.json()["trigger_type"] == "api"
+
+
+# ── rate limits ────────────────────────────────────────────────────────
+
+class TestAgentRunRateLimit:
+    @pytest.mark.asyncio
+    async def test_burst_trips_429(self, api_client):
+        """After 10 runs inside one minute the gate returns 429."""
+        from core.rate_limit import reset_limits
+        client, _, user = api_client
+        reset_limits(user.id)
+        try:
+            agent = await create_agent(
+                user_id=user.id, name="burst", description="d", system_prompt="p",
+            )
+            for _ in range(10):
+                resp = await client.post(f"/api/agents/{agent.id}/run")
+                assert resp.status_code == 202
+
+            resp = await client.post(f"/api/agents/{agent.id}/run")
+            assert resp.status_code == 429
+            assert "agent runs" in resp.json()["detail"].lower()
+        finally:
+            reset_limits(user.id)
+
+    @pytest.mark.asyncio
+    async def test_burst_trips_429_by_name(self, api_client):
+        from core.rate_limit import reset_limits
+        client, _, user = api_client
+        reset_limits(user.id)
+        try:
+            await create_agent(
+                user_id=user.id, name="burst-name", description="d", system_prompt="p",
+            )
+            for _ in range(10):
+                resp = await client.post("/api/agents/run", json={"name": "burst-name"})
+                assert resp.status_code == 202
+
+            resp = await client.post("/api/agents/run", json={"name": "burst-name"})
+            assert resp.status_code == 429
+        finally:
+            reset_limits(user.id)
 
 
 # ── auth ───────────────────────────────────────────────────────────────

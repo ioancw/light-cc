@@ -17,7 +17,7 @@ from croniter import croniter
 from sqlalchemy import select, update
 
 from core.database import get_db
-from core.db_models import AgentDefinition, Schedule, ScheduleRun
+from core.db_models import Schedule, ScheduleRun
 from core.job_queue import register_job
 
 logger = logging.getLogger(__name__)
@@ -129,14 +129,18 @@ async def _execute_schedule(
             return "DENIED: Risky commands cannot run in scheduled tasks."
         return True
 
-    # Resolve skill/command references in prompt (e.g. "/analyze AAPL")
+    # Resolve skill/command/agent references in prompt (e.g. "/analyze AAPL").
+    # Agent names win over nothing -- skill and command lookups run first.
     user_text = prompt
     skill_prompt: str | None = None
     tool_filter = None
+    delegated_agent = None  # if set, we run this agent instead of the generic loop
+    delegated_prompt = ""
 
     if prompt.strip().startswith("/"):
         from skills.registry import match_skill_by_name
         from commands.registry import get_command
+        from core.agent_crud import get_agent_by_name
         from core.models import resolve_dynamic_content
 
         tokens = prompt.strip().split(None, 1)
@@ -145,8 +149,6 @@ async def _execute_schedule(
 
         skill = match_skill_by_name(slash_name)
         if skill:
-            # Skill prompt goes into system (like normal chat flow),
-            # only the user's arguments go into the user message.
             skill_prompt = skill.resolve_arguments(slash_args)
             skill_prompt = await resolve_dynamic_content(skill_prompt)
             user_text = slash_args or skill.description
@@ -158,13 +160,68 @@ async def _execute_schedule(
                 skill_prompt = cmd.resolve_arguments(slash_args)
                 skill_prompt = await resolve_dynamic_content(skill_prompt)
                 user_text = slash_args or cmd.description
+            else:
+                # Fall through to AgentDefinition lookup: "/agent-name args"
+                # fires the named agent with args as the invocation prompt.
+                maybe_agent = await get_agent_by_name(slash_name, user_id)
+                if maybe_agent and maybe_agent.enabled:
+                    delegated_agent = maybe_agent
+                    delegated_prompt = slash_args or f"Execute your task ({maybe_agent.name})."
+
+    # If this schedule fires an agent, skip the generic loop entirely --
+    # run_agent_once owns execution + AgentRun persistence.
+    if delegated_agent is not None:
+        from core.agent_runner import run_agent_once
+        try:
+            result = await run_agent_once(
+                delegated_agent, delegated_prompt,
+                trigger_type="cron",
+                persist_conversation=True,
+            )
+            status = result.status
+            error = result.error
+            result_text = result.result_text
+            conv_id = result.conversation_id
+            now = datetime.now(timezone.utc)
+        except Exception as e:
+            status = "failed"
+            error = str(e)
+            result_text = None
+            conv_id = None
+            now = datetime.now(timezone.utc)
+            logger.error(f"Scheduled agent '{delegated_agent.name}' failed: {e}")
+
+        db2 = await get_db()
+        try:
+            await db2.execute(
+                update(ScheduleRun)
+                .where(ScheduleRun.id == run_id)
+                .values(
+                    status=status, result=result_text, error=error,
+                    finished_at=now, conversation_id=conv_id,
+                )
+            )
+            await db2.execute(
+                update(Schedule)
+                .where(Schedule.id == schedule_id)
+                .values(last_run_at=now, next_run_at=_compute_next_run(cron_expression, now, user_timezone))
+            )
+            await db2.commit()
+        except Exception as e:
+            logger.error(f"Failed to update schedule run (agent path): {e}")
+        finally:
+            await db2.close()
+
+        label = "completed" if status == "completed" else "failed"
+        await _notify_user_schedule_result(user_id, name, label, conv_id)
+        return
 
     # Use the same system prompt builder as normal chat so Claude gets
     # full context (tool guidelines, output dirs, no-emoji rules, etc.)
-    from server import _build_system_prompt
+    from core.system_prompt import build_system_prompt
     from core.sandbox import get_workspace
     user_workspace = get_workspace(user_id)
-    system = _build_system_prompt(
+    system = build_system_prompt(
         skill_prompt=skill_prompt,
         outputs_dir=str(user_workspace.outputs),
     )
@@ -307,30 +364,6 @@ async def _scheduler_loop() -> None:
                 sched.next_run_at = _compute_next_run(sched.cron_expression, now, sched.user_timezone)
                 await db.commit()
 
-            # Cron-triggered AgentDefinitions
-            agent_stmt = select(AgentDefinition).where(
-                AgentDefinition.enabled == True,  # noqa: E712
-                AgentDefinition.trigger == "cron",
-                AgentDefinition.next_run_at != None,  # noqa: E711
-                AgentDefinition.next_run_at <= now,
-            )
-            agent_result = await db.execute(agent_stmt)
-            due_agents = agent_result.scalars().all()
-
-            for a in due_agents:
-                if not a.cron_expression:
-                    continue
-                logger.info(f"Firing cron agent: {a.name} (id={a.id})")
-                try:
-                    from core.agent_runner import trigger_agent_run
-                    await trigger_agent_run(a, trigger_type="cron")
-                except Exception as e:
-                    logger.error(f"Failed to trigger cron agent '{a.name}': {e}")
-                    continue
-
-                a.next_run_at = _compute_next_run(a.cron_expression, now, a.cron_timezone or "UTC")
-                await db.commit()
-
             await db.close()
         except Exception as e:
             logger.error(f"Scheduler loop error: {e}")
@@ -352,17 +385,6 @@ async def start_scheduler() -> None:
         result = await db.execute(stmt)
         for sched in result.scalars().all():
             sched.next_run_at = _compute_next_run(sched.cron_expression, user_tz=sched.user_timezone)
-
-        # Same for cron-triggered AgentDefinitions
-        agent_stmt = select(AgentDefinition).where(
-            AgentDefinition.enabled == True,  # noqa: E712
-            AgentDefinition.trigger == "cron",
-            AgentDefinition.cron_expression != None,  # noqa: E711
-            AgentDefinition.next_run_at == None,  # noqa: E711
-        )
-        agent_result = await db.execute(agent_stmt)
-        for a in agent_result.scalars().all():
-            a.next_run_at = _compute_next_run(a.cron_expression, user_tz=a.cron_timezone or "UTC")
 
         await db.commit()
     finally:

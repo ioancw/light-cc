@@ -43,10 +43,6 @@
       max_turns: 20,
       timeout_seconds: 300,
       memory_scope: 'user',
-      trigger: 'manual',
-      cron_expression: '',
-      cron_timezone: 'UTC',
-      webhook_url: '',
       enabled: true,
     };
   }
@@ -73,8 +69,6 @@
   function startEdit(agent) {
     editing = agent;
     form = { ...agent };
-    form.cron_expression = agent.cron_expression || '';
-    form.webhook_url = agent.webhook_url || '';
     toolsText = (agent.tools || []).join(', ');
     view = 'edit';
   }
@@ -84,8 +78,6 @@
     payload.tools = toolsText.trim()
       ? toolsText.split(',').map(s => s.trim()).filter(Boolean)
       : null;
-    if (!payload.cron_expression) payload.cron_expression = null;
-    if (!payload.webhook_url) payload.webhook_url = null;
     if (!payload.model) payload.model = null;
 
     try {
@@ -224,13 +216,12 @@
             <div class="agent-card" class:disabled={!a.enabled}>
               <div class="agent-card-row">
                 <span class="agent-card-name">{a.name}</span>
-                <span class="agent-card-badge trigger-{a.trigger}">{a.trigger}</span>
-                {#if a.source === 'yaml'}<span class="agent-card-badge yaml">yaml</span>{/if}
+                {#if a.source === 'yaml'}<span class="agent-card-badge yaml">yaml</span>
+                {:else if a.source && a.source.startsWith('plugin:')}<span class="agent-card-badge yaml">{a.source}</span>{/if}
               </div>
               <div class="agent-card-desc">{a.description}</div>
               <div class="agent-card-meta">
                 {#if a.last_run_at}last run: {fmtDate(a.last_run_at)}{/if}
-                {#if a.trigger === 'cron' && a.next_run_at} · next: {fmtDate(a.next_run_at)}{/if}
               </div>
               <div class="agent-card-actions">
                 <button class="btn small" onclick={() => triggerRun(a)} disabled={!a.enabled}>Run</button>
@@ -290,31 +281,6 @@
               </select>
             </label>
           </div>
-          <label>
-            Trigger
-            <select bind:value={form.trigger}>
-              <option value="manual">manual</option>
-              <option value="cron">cron</option>
-              <option value="webhook">webhook</option>
-              <option value="api">api</option>
-            </select>
-          </label>
-          {#if form.trigger === 'cron'}
-            <div class="form-row">
-              <label>
-                Cron expression
-                <input type="text" bind:value={form.cron_expression} placeholder="0 8 * * 1-5" />
-              </label>
-              <label>
-                Timezone
-                <input type="text" bind:value={form.cron_timezone} placeholder="UTC" />
-              </label>
-            </div>
-          {/if}
-          <label>
-            Webhook URL (optional)
-            <input type="text" bind:value={form.webhook_url} placeholder="https://..." />
-          </label>
           <div class="form-actions">
             <button class="btn" onclick={saveAgent}>{editing ? 'Update' : 'Create'}</button>
             <button class="btn" onclick={() => { view = 'list'; }}>Cancel</button>
@@ -447,7 +413,6 @@
     text-transform: uppercase;
     letter-spacing: 0.04em;
   }
-  .agent-card-badge.trigger-cron { background: var(--accent-soft); color: var(--fg-bright); }
   .agent-card-badge.yaml { background: var(--border2); }
   .agent-card-desc {
     color: var(--fg-dim);

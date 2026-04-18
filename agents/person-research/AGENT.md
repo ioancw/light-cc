@@ -6,8 +6,6 @@ description: >
   structured markdown brief covering background, current role, company
   snapshot, recent activity, conversation angles, and suggested questions.
 tools: [WebSearch, WebFetch, Skill, Write]
-trigger: manual
-enabled: true
 max-turns: 30
 timeout: 600
 ---

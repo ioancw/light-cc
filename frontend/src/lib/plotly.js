@@ -20,15 +20,14 @@ function buildTheme() {
   const surface2 = readVar('--surface2', '#16161c');
   return {
     colorway: [
-      '#d89878', '#38bdf8', '#10b981', '#f59e0b', '#ef4444',
+      '#818cf8', '#38bdf8', '#10b981', '#f59e0b', '#ef4444',
       '#a78bfa', '#fb923c', '#e879f9', '#2dd4bf', '#f472b6',
-      '#c17b5b', '#facc15',
+      '#6366f1', '#facc15',
     ],
     font: { family: 'Geist Mono, monospace', size: 11, color: fg },
     paper_bgcolor: 'rgba(0,0,0,0)',
     plot_bgcolor: 'rgba(0,0,0,0)',
-    margin: { l: 56, r: 20, t: 48, b: 48 },
-    title: { font: { size: 14, color: fgBright }, x: 0, xanchor: 'left' },
+    margin: { l: 56, r: 24, t: 16, b: 44 },
     xaxis: {
       gridcolor: border, zerolinecolor: border2, linecolor: border2,
       tickfont: { size: 10, color: fgDim }, title: { font: { size: 11, color: fgDim } },
@@ -104,6 +103,9 @@ export async function renderChart(el, plotlyJson, opts = {}) {
 
     // Strip any baked-in template (plotly_dark etc.) so our theme wins.
     delete layout.template;
+    // The Svelte chart-header already shows the title -- avoid duplicating it inside the figure.
+    delete layout.title;
+    layout.margin = { ...theme.margin, ...(fig.layout?.margin || {}), t: theme.margin.t };
 
     layout.paper_bgcolor = theme.paper_bgcolor;
     layout.plot_bgcolor = theme.plot_bgcolor;
@@ -115,6 +117,18 @@ export async function renderChart(el, plotlyJson, opts = {}) {
     layout.autosize = true;
     delete layout.width;
     delete layout.height;
+
+    // Bump line traces to a slightly chunkier stroke for better contrast.
+    const data = Array.isArray(fig.data) ? fig.data.map(tr => {
+      if (tr && (tr.type === 'scatter' || tr.type === 'scattergl' || !tr.type) && tr.mode && tr.mode.includes('lines')) {
+        return { ...tr, line: { width: 2.2, ...(tr.line || {}) } };
+      }
+      if (tr && (tr.type === 'scatter' || !tr.type) && !tr.mode) {
+        // Default scatter mode includes lines
+        return { ...tr, line: { width: 2.2, ...(tr.line || {}) } };
+      }
+      return tr;
+    }) : fig.data;
 
     // In expanded mode the container already has explicit dimensions
     // (modal body fills its parent). Inline mode computes a height that
@@ -134,7 +148,12 @@ export async function renderChart(el, plotlyJson, opts = {}) {
       }
     }
 
-    Plotly.newPlot(el, fig.data, layout, { responsive: true, displayModeBar: true, modeBarButtonsToRemove: ['lasso2d', 'select2d'] });
+    Plotly.newPlot(el, data, layout, {
+      responsive: true,
+      displayModeBar: opts.expanded ? 'hover' : false,
+      displaylogo: false,
+      modeBarButtonsToRemove: ['lasso2d', 'select2d', 'autoScale2d'],
+    });
   } catch (e) {
     console.error('Plotly render error:', e);
   }

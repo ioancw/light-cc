@@ -1,6 +1,19 @@
-"""Unified sub-agent tool -- spawn typed agents, run in background, continue/resume.
+"""Task tool -- in-conversation subagent delegation, matching Claude Code's model.
 
-Merges the former Agent + BackgroundAgent + CheckBackground tools into one.
+The main agent emits a ``Task`` tool call with ``{subagent_type, prompt,
+description}``. A fresh agent loop runs in isolated context with the subagent's
+own system prompt + tool filter, and returns a single message back to the
+caller as the tool result. The parent conversation never sees the subagent's
+intermediate tool calls.
+
+Lookup order for ``subagent_type``:
+  1. User-owned ``AgentDefinition`` (scoped by session user_id). Routes through
+     ``run_agent_once`` so each delegation creates a tracked ``AgentRun`` row.
+  2. Builtin ``AgentType`` (explorer, planner, coder, researcher, default).
+     Runs ephemerally -- no DB record.
+
+Nested delegation is allowed but capped at depth 2 via ``Task`` being excluded
+from the subagent's own tool set (see ``EXCLUDED_TOOLS``).
 """
 
 from __future__ import annotations
@@ -19,7 +32,8 @@ from core.agent_types import AgentType, get_agent_type, EXCLUDED_TOOLS, list_age
 
 logger = logging.getLogger(__name__)
 
-# ── State tracking ──
+
+# ── Background-run state ────────────────────────────────────────────────
 
 MAX_AGENTS = 100
 AGENT_TTL_SECONDS = 3600
@@ -28,17 +42,14 @@ AGENT_TTL_SECONDS = 3600
 @dataclass
 class SubAgentState:
     agent_id: str
-    agent_type: str
+    subagent_type: str
     status: str  # "running" | "completed" | "failed"
-    messages: list[dict[str, Any]] = field(default_factory=list)
     result: str | None = None
     created_at: float = 0.0
     description: str = ""
 
 
 _active_agents: dict[str, SubAgentState] = {}
-
-# Per-session callbacks for pushing notifications to the UI (set by ws_router.py)
 _notify_callbacks: dict[str, Callable[[str, str], Awaitable[None]]] = {}
 
 
@@ -62,22 +73,18 @@ def _get_notify_callback() -> Callable[[str, str], Awaitable[None]] | None:
 
 
 def _cleanup_agents() -> None:
-    """Remove completed/failed agents older than TTL."""
     now = time.time()
     expired = [
-        aid
-        for aid, a in _active_agents.items()
-        if a.status in ("completed", "failed")
-        and now - a.created_at > AGENT_TTL_SECONDS
+        aid for aid, a in _active_agents.items()
+        if a.status in ("completed", "failed") and now - a.created_at > AGENT_TTL_SECONDS
     ]
     for aid in expired:
         del _active_agents[aid]
 
 
-# ── Permission check ──
+# ── Permission check (stricter for subagents) ───────────────────────────
 
 async def _subagent_permission_check(name: str, tool_input: dict[str, Any]) -> bool | str:
-    """Permission check for sub-agents -- risky commands denied (no UI prompt)."""
     if is_blocked(name, tool_input):
         return "BLOCKED: This command is not allowed for safety reasons."
     if is_risky(name, tool_input):
@@ -85,135 +92,88 @@ async def _subagent_permission_check(name: str, tool_input: dict[str, Any]) -> b
     return True
 
 
-# ── Name resolution ──
+# ── Resolution: AgentDefinition first, then builtin AgentType ────────────
 
-async def _resolve_agent_type(name: str) -> AgentType | None:
-    """Resolve an agent name against the unified registry.
-
-    Lookup order: user-owned AgentDefinition (scoped by session user_id), then
-    builtin AgentType. User agents shadow builtins of the same name so users
-    can override behavior without editing source.
+async def _resolve_agent_definition(name: str, user_id: str | None):
+    """Return the user's ``AgentDefinition`` for ``name`` if one exists and is
+    enabled. Returns ``None`` when absent so the caller can fall back to
+    builtin ``AgentType``. Never raises for DB errors -- just logs and falls back.
     """
+    if not user_id:
+        return None
     try:
-        from core.session import current_session_get
-        user_id = current_session_get("user_id")
-    except Exception:
-        user_id = None
-
-    if user_id:
-        try:
-            from sqlalchemy import select
-            from core.database import get_db
-            from core.db_models import AgentDefinition
-
-            db = await get_db()
-            try:
-                res = await db.execute(
-                    select(AgentDefinition).where(
-                        AgentDefinition.user_id == user_id,
-                        AgentDefinition.name == name,
-                        AgentDefinition.enabled.is_(True),
-                    )
-                )
-                a = res.scalar_one_or_none()
-                if a is not None:
-                    return AgentType(
-                        name=a.name,
-                        system_prompt=a.system_prompt,
-                        tool_names=a.tools_list or [],
-                        model=a.model,
-                        max_turns=a.max_turns or 20,
-                        timeout_seconds=a.timeout_seconds or 300,
-                    )
-            finally:
-                await db.close()
-        except Exception as e:
-            logger.warning(f"Failed to resolve user agent '{name}': {e}")
-
-    return get_agent_type(name)
+        from core.agent_crud import get_agent_by_name
+        agent = await get_agent_by_name(name, user_id)
+        if agent and agent.enabled:
+            return agent
+    except Exception as e:
+        logger.warning(f"Failed to resolve user agent '{name}': {e}")
+    return None
 
 
-# ── Tool resolution ──
-
-def _get_tools_for_type(at: AgentType | None, tool_names: list[str] | None = None) -> list[dict[str, Any]]:
-    """Get tool schemas for a resolved agent type, excluding Agent tools."""
-    if tool_names:
-        # Explicit tool list (e.g. from skill context=fork)
-        filtered = [n for n in tool_names if n not in EXCLUDED_TOOLS]
-        return get_tool_schemas(filtered)
-
+def _get_tools_for_agent_type(at: AgentType | None) -> list[dict[str, Any]]:
+    """Pick the tool schema set for a builtin AgentType, minus excluded tools."""
     if at and at.tool_names:
         return get_tool_schemas(at.tool_names)
-
-    # Default: all tools minus Agent tools
-    all_tools = get_all_tool_schemas()
-    return [t for t in all_tools if t["name"] not in EXCLUDED_TOOLS]
+    return [t for t in get_all_tool_schemas() if t["name"] not in EXCLUDED_TOOLS]
 
 
-# ── Core runner ──
+# ── Execution paths ─────────────────────────────────────────────────────
+
+async def _run_via_definition(agent_def, prompt: str, parent_session_id: str | None) -> tuple[str, str]:
+    """Run a user-defined AgentDefinition. Returns ``(result_text, run_id)``.
+
+    Delegates to ``run_agent_once`` so each Task invocation produces an
+    ``AgentRun`` row for observability. The parent conversation is already the
+    record of the delegation, so we don't persist a child conversation.
+    """
+    from core.agent_runner import run_agent_once
+    result = await run_agent_once(
+        agent_def, prompt,
+        trigger_type="subagent",
+        parent_session_id=parent_session_id,
+        persist_conversation=False,
+    )
+    if result.status == "failed":
+        return (f"Subagent failed: {result.error or 'unknown error'}", result.run_id)
+    return (result.result_text or "(no output)", result.run_id)
+
 
 async def run_subagent(
+    *,
     prompt: str,
-    system: str | None = None,
+    system: str,
     tool_names: list[str] | None = None,
-    agent_type: str = "default",
-    max_turns: int | None = None,
-    max_result_chars: int | None = None,
     model: str | None = None,
-    existing_messages: list[dict[str, Any]] | None = None,
+    max_turns: int = 20,
+    timeout: int = 300,
 ) -> tuple[str, list[dict[str, Any]]]:
-    """Run a sub-agent loop and return (text_output, messages).
+    """Low-level helper for non-Task call sites that want an isolated agent run
+    with a custom system prompt (skill context=fork, eval_optimize).
 
-    Args:
-        prompt: The task for the sub-agent.
-        system: Optional system prompt override.
-        tool_names: Optional explicit tool list (overrides agent_type tools).
-        agent_type: Agent type name for tool/prompt selection.
-        max_turns: Maximum loop iterations (default from agent type).
-        max_result_chars: Truncate result to this many chars (default from agent type).
-        model: Model override (default from agent type).
-        existing_messages: Resume with preserved messages (for continue/resume).
-
-    Returns:
-        Tuple of (text_output, messages_list).
+    Returns ``(result_text, messages)`` where ``messages`` is the final
+    conversation list. Kept distinct from the ``Task`` tool because these
+    callers drive system/tools directly rather than resolving an AgentDefinition.
     """
     from core import agent
 
-    at = await _resolve_agent_type(agent_type)
-
-    if system is None:
-        system = at.system_prompt if at else "Complete the task and return a clear, concise result."
-
-    if max_turns is None:
-        max_turns = at.max_turns if at else 20
-    if max_result_chars is None:
-        max_result_chars = at.max_result_chars if at else 10000
-    if model is None and at:
-        model = at.model
-    timeout = at.timeout_seconds if at else 300
-
-    # Build messages -- either continue existing or start fresh
-    if existing_messages is not None:
-        messages = existing_messages
-        messages.append({"role": "user", "content": prompt})
-    else:
-        messages = [{"role": "user", "content": prompt}]
-
-    tools = _get_tools_for_type(at, tool_names)
-
+    tools = get_tool_schemas(tool_names) if tool_names else [
+        t for t in get_all_tool_schemas() if t["name"] not in EXCLUDED_TOOLS
+    ]
+    messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
     output_parts: list[str] = []
 
     async def on_text(text: str) -> None:
         output_parts.append(text)
 
-    async def on_tool_start(name: str, tool_input: dict[str, Any]) -> None:
+    async def on_tool_start(n: str, i: dict[str, Any]) -> None:
         return None
 
     async def on_tool_end(ctx: Any, result: str) -> None:
         pass
 
     try:
-        messages = await asyncio.wait_for(
+        await asyncio.wait_for(
             agent.run(
                 messages=messages,
                 tools=tools,
@@ -228,152 +188,159 @@ async def run_subagent(
             timeout=timeout,
         )
     except asyncio.TimeoutError:
-        result = f"Sub-agent timed out after {timeout}s. Partial output: {''.join(output_parts)[:1000]}"
-        return result, messages
+        return f"Sub-agent timed out after {timeout}s. Partial output: {''.join(output_parts)[:1000]}", messages
 
-    result = "".join(output_parts)[:max_result_chars]
-    return result, messages
+    return "".join(output_parts), messages
 
 
-# ── Background runner ──
+async def _run_via_builtin(at: AgentType | None, prompt: str, model_override: str | None) -> str:
+    """Run a builtin AgentType ephemerally (no DB record). Returns result text."""
+    from core import agent
 
-async def _run_background_agent(state: SubAgentState, prompt: str, **kwargs: Any) -> None:
-    """Run a sub-agent in the background and update state on completion."""
+    system = at.system_prompt if at else (
+        "You are a sub-agent working on a specific task. "
+        "Complete the task and return a clear, concise result."
+    )
+    max_turns = at.max_turns if at else 20
+    max_result_chars = at.max_result_chars if at else 10000
+    model = model_override or (at.model if at else None)
+    timeout = at.timeout_seconds if at else 300
+    tools = _get_tools_for_agent_type(at)
+
+    messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
+    output_parts: list[str] = []
+
+    async def on_text(text: str) -> None:
+        output_parts.append(text)
+
+    async def on_tool_start(n: str, i: dict[str, Any]) -> None:
+        return None
+
+    async def on_tool_end(ctx: Any, result: str) -> None:
+        pass
+
     try:
-        result, messages = await run_subagent(prompt=prompt, **kwargs)
-        state.status = "completed"
-        state.result = result
-        state.messages = messages
+        await asyncio.wait_for(
+            agent.run(
+                messages=messages,
+                tools=tools,
+                system=system,
+                on_text=on_text,
+                on_tool_start=on_tool_start,
+                on_tool_end=on_tool_end,
+                on_permission_check=_subagent_permission_check,
+                max_turns=max_turns,
+                model=model,
+            ),
+            timeout=timeout,
+        )
+    except asyncio.TimeoutError:
+        return f"Sub-agent timed out after {timeout}s. Partial output: {''.join(output_parts)[:1000]}"
 
-        _notify_callback = _get_notify_callback()
-        if _notify_callback:
-            label = state.description or f"Agent ({state.agent_type})"
-            await _notify_callback(
-                state.agent_id,
-                f"**{label} completed**\n\n{result[:2000]}",
-            )
-    except Exception as e:
-        state.status = "failed"
-        state.result = str(e)
-
-        _notify_callback = _get_notify_callback()
-        if _notify_callback:
-            label = state.description or f"Agent ({state.agent_type})"
-            await _notify_callback(
-                state.agent_id,
-                f"**{label} failed**\n\nError: {e}",
-            )
+    return "".join(output_parts)[:max_result_chars]
 
 
-# ── Tool handler ──
+# ── Tool handler ────────────────────────────────────────────────────────
 
-async def handle_agent(tool_input: dict[str, Any]) -> str:
-    """Unified Agent tool handler -- spawn, continue, or run in background."""
+async def handle_task(tool_input: dict[str, Any]) -> str:
+    """Task tool handler -- CC-compliant delegation entry point.
+
+    Schema: ``{subagent_type, prompt, description?, run_in_background?, model?}``
+    """
+    subagent_type = tool_input.get("subagent_type") or tool_input.get("agent_type") or "default"
     prompt = tool_input.get("prompt", "")
+    description = tool_input.get("description", "")
+    run_in_background = bool(tool_input.get("run_in_background", False))
+    model_override = tool_input.get("model")
+
     if not prompt:
         return json.dumps({"error": "No prompt provided"})
 
-    agent_id = tool_input.get("agent_id")
-    agent_type = tool_input.get("agent_type", "default")
-    run_in_background = tool_input.get("run_in_background", False)
-    description = tool_input.get("description", "")
+    try:
+        from core.session import current_session_get, _current_session_id
+        user_id = current_session_get("user_id")
+        parent_session_id = _current_session_id.get(None)
+    except Exception:
+        user_id = None
+        parent_session_id = None
 
-    # Validate agent name against unified registry (user agents + builtin types).
-    if not agent_id:
-        resolved = await _resolve_agent_type(agent_type)
-        if resolved is None:
-            builtins = [at.name for at in list_agent_types()]
-            return json.dumps({
-                "error": (
-                    f"Unknown agent: '{agent_type}'. Checked your custom agents and "
-                    f"builtins ({builtins})."
-                )
-            })
+    # Resolve: user agent first, then builtin type.
+    agent_def = await _resolve_agent_definition(subagent_type, user_id)
+    at = get_agent_type(subagent_type) if agent_def is None else None
+
+    if agent_def is None and at is None:
+        builtins = [x.name for x in list_agent_types()]
+        return json.dumps({
+            "error": (
+                f"Unknown subagent_type: '{subagent_type}'. "
+                f"Checked your custom agents and builtins ({builtins})."
+            )
+        })
 
     _cleanup_agents()
-
-    # ── Continue existing agent ──
-    if agent_id:
-        state = _active_agents.get(agent_id)
-        if not state:
-            return json.dumps({"error": f"Agent '{agent_id}' not found"})
-        if state.status == "running":
-            return json.dumps({"error": f"Agent '{agent_id}' is still running"})
-
-        state.status = "running"
-
-        if run_in_background:
-            asyncio.create_task(_run_background_agent(
-                state, prompt,
-                agent_type=state.agent_type,
-                existing_messages=state.messages,
-            ))
-            return json.dumps({
-                "status": "resumed_in_background",
-                "agent_id": agent_id,
-            })
-
-        result, messages = await run_subagent(
-            prompt=prompt,
-            agent_type=state.agent_type,
-            existing_messages=state.messages,
-        )
-        state.status = "completed"
-        state.result = result
-        state.messages = messages
-        return json.dumps({"result": result, "agent_id": agent_id})
-
-    # ── Spawn new agent ──
-    if len(_active_agents) >= MAX_AGENTS:
-        return json.dumps({"error": "Too many active agents. Wait for some to complete."})
-
     new_id = uuid.uuid4().hex[:8]
     state = SubAgentState(
         agent_id=new_id,
-        agent_type=agent_type,
+        subagent_type=subagent_type,
         status="running",
         created_at=time.time(),
         description=description,
     )
     _active_agents[new_id] = state
 
+    async def _run_foreground() -> str:
+        try:
+            if agent_def is not None:
+                result, run_id = await _run_via_definition(agent_def, prompt, parent_session_id)
+                state.status = "completed"
+                state.result = result
+                return json.dumps({
+                    "result": result, "agent_id": new_id, "run_id": run_id,
+                    "subagent_type": subagent_type,
+                })
+            result = await _run_via_builtin(at, prompt, model_override)
+            state.status = "completed"
+            state.result = result
+            return json.dumps({
+                "result": result, "agent_id": new_id,
+                "subagent_type": subagent_type,
+            })
+        except Exception as e:
+            state.status = "failed"
+            state.result = str(e)
+            return json.dumps({"error": str(e), "agent_id": new_id})
+
     if run_in_background:
-        asyncio.create_task(_run_background_agent(
-            state, prompt,
-            agent_type=agent_type,
-        ))
+        async def _bg() -> None:
+            payload_json = await _run_foreground()
+            cb = _get_notify_callback()
+            if cb:
+                label = description or f"Subagent ({subagent_type})"
+                payload = json.loads(payload_json)
+                summary = payload.get("result") or payload.get("error") or ""
+                status = state.status
+                await cb(new_id, f"**{label} {status}**\n\n{summary[:2000]}")
+
+        asyncio.create_task(_bg())
         return json.dumps({
             "status": "started",
             "agent_id": new_id,
-            "agent_type": agent_type,
-            "message": "Agent is running in the background. You will be notified when it completes.",
+            "subagent_type": subagent_type,
+            "message": "Subagent running in background. You'll be notified when it completes.",
         })
 
-    # Foreground -- block until complete
-    try:
-        result, messages = await run_subagent(
-            prompt=prompt,
-            agent_type=agent_type,
-        )
-        state.status = "completed"
-        state.result = result
-        state.messages = messages
-        return json.dumps({"result": result, "agent_id": new_id})
-    except Exception as e:
-        state.status = "failed"
-        state.result = str(e)
-        return json.dumps({"error": str(e), "agent_id": new_id})
+    return await _run_foreground()
 
 
 async def handle_agent_status(tool_input: dict[str, Any]) -> str:
-    """Check the status of sub-agents."""
+    """Check the status of background subagents."""
     agent_id = tool_input.get("agent_id", "")
 
     if not agent_id:
         agents = [
             {
                 "agent_id": a.agent_id,
-                "type": a.agent_type,
+                "subagent_type": a.subagent_type,
                 "status": a.status,
                 "description": a.description,
             }
@@ -387,70 +354,71 @@ async def handle_agent_status(tool_input: dict[str, Any]) -> str:
 
     return json.dumps({
         "agent_id": state.agent_id,
-        "type": state.agent_type,
+        "subagent_type": state.subagent_type,
         "status": state.status,
         "description": state.description,
         "result": state.result,
     })
 
 
-# ── Register tools ──
+# ── Register tools ──────────────────────────────────────────────────────
 
 register_tool(
-    name="Agent",
-    aliases=["subagent", "BackgroundAgent", "background_agent"],
+    name="Task",
+    aliases=["Agent", "subagent", "BackgroundAgent", "background_agent"],
     description=(
-        "Spawn a sub-agent to handle a complex task independently in a separate context. "
-        "Use for: parallelizing independent work, isolating large tasks from the main conversation, "
-        "or delegating specialized work (research, code exploration, planning). "
-        "Pass `agent_type` to select a specialist. Builtin types: "
-        "explorer (file discovery), planner (architecture), coder (implementation), "
-        "researcher (web search + analysis), default (all tools). "
-        "You can also pass the name of any custom agent you have defined -- those "
-        "take precedence over builtins with the same name. "
-        "Use run_in_background=true to continue working while the agent runs. "
-        "Resume a previous agent by passing its agent_id."
+        "Delegate a task to a specialized subagent. The subagent runs in an isolated "
+        "context with its own system prompt and tool filter, and returns a single "
+        "message as the result. Use for: parallelising independent work (fire "
+        "multiple Task calls in one turn), isolating large investigations from the "
+        "main conversation, or delegating to a domain-specialist persona. "
+        "Pass `subagent_type` to select the agent -- either one of your custom "
+        "agents (resolved by name for your user) or a builtin: explorer (file "
+        "discovery), planner (architecture), coder (implementation), researcher "
+        "(web + analysis), default (all tools). Custom agents shadow builtins of "
+        "the same name. Use `run_in_background=true` to continue working while "
+        "the subagent runs -- you'll be notified when it completes."
     ),
     input_schema={
         "type": "object",
         "properties": {
-            "prompt": {
-                "type": "string",
-                "description": "The task or follow-up message for the agent",
-            },
-            "agent_type": {
+            "subagent_type": {
                 "type": "string",
                 "description": (
-                    "Name of the agent to spawn -- either a builtin type "
-                    "(explorer/planner/coder/researcher/default) or one of your "
-                    "custom agents. Default: 'default'."
+                    "Name of the subagent -- either one of your custom agents "
+                    "or a builtin (explorer/planner/coder/researcher/default). "
+                    "Default: 'default'."
                 ),
             },
-            "agent_id": {
+            "prompt": {
                 "type": "string",
-                "description": "Resume a previously spawned agent by ID",
-            },
-            "run_in_background": {
-                "type": "boolean",
-                "description": "If true, return immediately and notify on completion",
+                "description": "The task for the subagent. Must be self-contained -- the subagent has no view of the parent conversation.",
             },
             "description": {
                 "type": "string",
-                "description": "Short label for the task (shown in notifications)",
+                "description": "Short (3-5 word) description of the task, shown in UI and notifications.",
+            },
+            "run_in_background": {
+                "type": "boolean",
+                "description": "If true, return immediately and notify on completion. Defaults to false (blocking).",
+            },
+            "model": {
+                "type": "string",
+                "description": "Optional model override for this delegation (e.g. 'claude-haiku-4-5-20251001').",
             },
         },
-        "required": ["prompt"],
+        "required": ["subagent_type", "prompt", "description"],
     },
-    handler=handle_agent,
+    handler=handle_task,
 )
 
 register_tool(
     name="AgentStatus",
     aliases=["CheckBackground", "check_background"],
     description=(
-        "Check the status of sub-agents. "
-        "Call with no agent_id to list all active/completed agents, "
-        "or with an agent_id to get the result of a specific agent."
+        "Check the status of background subagents. "
+        "Call with no agent_id to list all active/completed background agents, "
+        "or with an agent_id to get the result of a specific one."
     ),
     input_schema={
         "type": "object",

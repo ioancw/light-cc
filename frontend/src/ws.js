@@ -222,6 +222,15 @@ function handleEvent(type, data, cid = null) {
       }
       break;
 
+    case 'd3_chart':
+      if (msg) {
+        const tc = msg.toolCalls.find(t => t.id === data.tool_id);
+        if (tc) {
+          tc.d3Chart = { title: data.title, spec: data.spec };
+        }
+      }
+      break;
+
     case 'html_embed':
       if (msg) {
         const tc = msg.toolCalls.find(t => t.id === data.tool_id);
