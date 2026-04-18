@@ -36,7 +36,7 @@ def upgrade() -> None:
         sa.Column("tool_name", sa.String(100), nullable=False),
         sa.Column("tool_input_hash", sa.String(64), nullable=True),
         sa.Column("result_summary", sa.String(500), nullable=True),
-        sa.Column("success", sa.Boolean, server_default=sa.text("1")),
+        sa.Column("success", sa.Boolean, server_default=sa.text("true")),
         sa.Column("duration_ms", sa.Integer, server_default=sa.text("0")),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
     )

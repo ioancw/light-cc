@@ -19,13 +19,7 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # Add missing conversation_id column to schedule_runs (if not already present
-    # from a partially-applied prior run)
-    conn = op.get_bind()
-    inspector = sa.inspect(conn)
-    cols = [col['name'] for col in inspector.get_columns('schedule_runs')]
-    if 'conversation_id' not in cols:
-        op.add_column('schedule_runs', sa.Column('conversation_id', sa.String(32), nullable=True))
+    op.add_column('schedule_runs', sa.Column('conversation_id', sa.String(32), nullable=True))
 
     # Deduplicate any existing rows before adding constraint:
     # keep the oldest schedule for each (user_id, name) pair.

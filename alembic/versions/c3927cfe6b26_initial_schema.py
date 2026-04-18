@@ -63,9 +63,37 @@ def upgrade() -> None:
         sa.Column('created_at', sa.DateTime(timezone=True)),
     )
 
+    op.create_table(
+        'schedules',
+        sa.Column('id', sa.String(32), primary_key=True),
+        sa.Column('user_id', sa.String(32), sa.ForeignKey('users.id'), nullable=False, index=True),
+        sa.Column('name', sa.String(255), nullable=False),
+        sa.Column('cron_expression', sa.String(100), nullable=False),
+        sa.Column('prompt', sa.Text(), nullable=False),
+        sa.Column('enabled', sa.Boolean(), server_default=sa.text('true')),
+        sa.Column('last_run_at', sa.DateTime(timezone=True), nullable=True),
+        sa.Column('next_run_at', sa.DateTime(timezone=True), nullable=True),
+        sa.Column('created_at', sa.DateTime(timezone=True)),
+        sa.Column('updated_at', sa.DateTime(timezone=True)),
+    )
+
+    op.create_table(
+        'schedule_runs',
+        sa.Column('id', sa.String(32), primary_key=True),
+        sa.Column('schedule_id', sa.String(32), sa.ForeignKey('schedules.id'), nullable=False, index=True),
+        sa.Column('status', sa.String(20), nullable=False, server_default='running'),
+        sa.Column('result', sa.Text(), nullable=True),
+        sa.Column('error', sa.Text(), nullable=True),
+        sa.Column('started_at', sa.DateTime(timezone=True)),
+        sa.Column('finished_at', sa.DateTime(timezone=True), nullable=True),
+        sa.Column('tokens_used', sa.Integer(), server_default=sa.text('0')),
+    )
+
 
 def downgrade() -> None:
     """Drop all tables."""
+    op.drop_table('schedule_runs')
+    op.drop_table('schedules')
     op.drop_table('usage_events')
     op.drop_table('messages')
     op.drop_table('conversations')

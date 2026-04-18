@@ -34,7 +34,7 @@ def upgrade() -> None:
         sa.Column("cron_expression", sa.String(100), nullable=True),
         sa.Column("cron_timezone", sa.String(50), server_default="UTC"),
         sa.Column("webhook_url", sa.Text, nullable=True),
-        sa.Column("enabled", sa.Boolean, server_default=sa.text("1")),
+        sa.Column("enabled", sa.Boolean, server_default=sa.text("true")),
         sa.Column("source", sa.String(20), server_default="user"),
         sa.Column("last_run_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("next_run_at", sa.DateTime(timezone=True), nullable=True, index=True),

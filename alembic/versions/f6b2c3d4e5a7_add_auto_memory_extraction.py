@@ -44,7 +44,7 @@ def upgrade() -> None:
                 "auto_extract_enabled",
                 sa.Boolean(),
                 nullable=False,
-                server_default=sa.text("0"),
+                server_default=sa.text("false"),
             ),
         )
         batch.add_column(
