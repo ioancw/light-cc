@@ -22,7 +22,8 @@ def upgrade() -> None:
     # Add missing conversation_id column to schedule_runs (if not already present
     # from a partially-applied prior run)
     conn = op.get_bind()
-    cols = [row[1] for row in conn.execute(sa.text("PRAGMA table_info('schedule_runs')"))]
+    inspector = sa.inspect(conn)
+    cols = [col['name'] for col in inspector.get_columns('schedule_runs')]
     if 'conversation_id' not in cols:
         op.add_column('schedule_runs', sa.Column('conversation_id', sa.String(32), nullable=True))
 
