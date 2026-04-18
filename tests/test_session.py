@@ -64,7 +64,10 @@ class TestConnectionLifecycle:
 
         destroy_connection("s1")
         assert get_connection("s1") is None
-        assert get_conv_session(cid) is None
+        # Conversation sub-sessions intentionally outlive the connection so
+        # in-flight agent tasks survive WS reconnects. Explicit
+        # destroy_conv_session is required to evict them.
+        assert get_conv_session(cid) is not None
         assert "s1" not in _conn_convs
 
 

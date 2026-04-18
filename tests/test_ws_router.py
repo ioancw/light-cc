@@ -122,7 +122,10 @@ class TestConversationEvents:
 
 
 class TestDisconnectCleanup:
-    def test_destroy_cleans_all_conversations(self, clean_sessions):
+    def test_destroy_leaves_conversations_alive(self, clean_sessions):
+        """Conv sub-sessions survive connection teardown so in-flight agent
+        tasks (keyed by cid in core.agent_runs) can keep running across a
+        WS reconnect."""
         create_connection("s1", user_id="u1")
         create_conv_session("c1", "s1")
         create_conv_session("c2", "s1")
@@ -133,9 +136,10 @@ class TestDisconnectCleanup:
         from core.session import destroy_connection
         destroy_connection("s1")
 
-        assert conv_session_get("c1", "messages") is None
-        assert conv_session_get("c2", "messages") is None
-        assert conv_session_get("c3", "messages") is None
+        # Conv state intentionally outlives the connection.
+        assert conv_session_get("c1", "messages") == []
+        assert conv_session_get("c2", "messages") == []
+        assert conv_session_get("c3", "messages") == []
 
     @pytest.mark.asyncio
     async def test_async_destroy_cleans_redis(self, clean_sessions, mock_redis):

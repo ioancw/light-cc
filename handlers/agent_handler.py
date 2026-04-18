@@ -13,7 +13,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
-from core import agent
+from core import agent, agent_runs
 from core.config import settings
 from core.hooks import fire_hooks, has_hooks
 from core.models import resolve_dynamic_content
@@ -139,7 +139,6 @@ async def handle_user_message(
     cid: str,
     data: dict[str, Any],
     send_event: SendEvent,
-    pending_permissions: dict[str, asyncio.Future],
     *,
     build_system_prompt,
     outputs_dir: Path,
@@ -431,7 +430,7 @@ async def handle_user_message(
         # result is None -- ask the user
         req_id = f"perm_{uuid.uuid4().hex[:8]}"
         future: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
-        pending_permissions[req_id] = future
+        agent_runs.add_pending_permission(cid, req_id, future)
 
         await send_event("permission_request", {
             "request_id": req_id,
@@ -445,7 +444,7 @@ async def handle_user_message(
         except asyncio.TimeoutError:
             return "Timed out waiting for user permission"
         finally:
-            pending_permissions.pop(req_id, None)
+            agent_runs.pop_pending_permission(cid, req_id)
 
         return True if allowed else "User denied this action"
 

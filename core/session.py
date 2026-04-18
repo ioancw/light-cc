@@ -87,9 +87,14 @@ def connection_set(session_id: str, key: str, value: Any) -> None:
 
 
 def destroy_connection(session_id: str) -> None:
-    """Remove connection and all its conversation sub-sessions."""
-    for cid in list(_conn_convs.get(session_id, [])):
-        _conv_sessions.pop(cid, None)
+    """Remove connection-level state.
+
+    Conversation sub-sessions are intentionally left in place: an agent
+    task may still be running for the cid after the WS drops, and the
+    reconnecting client needs the state to still be there when it
+    resubscribes. Evicting happens lazily (Redis flush + process restart)
+    or explicitly via ``destroy_conv_session``.
+    """
     _conn_convs.pop(session_id, None)
     _connections.pop(session_id, None)
 
@@ -110,14 +115,22 @@ _CONV_DEFAULTS = {
     "active_model": None,
     "tasks": {},
     "active_files": [],
+    "user_id": "default",
 }
 
 
 def create_conv_session(cid: str, session_id: str) -> dict[str, Any]:
-    """Create a conversation sub-session linked to a connection."""
+    """Create a conversation sub-session linked to a connection.
+
+    The originating ``session_id`` is recorded as ``_conn_id`` but can go
+    stale across WS reconnects; ``user_id`` is copied in at creation time
+    so the conv sub-session remains self-sufficient after the connection
+    is destroyed.
+    """
     conv: dict[str, Any] = {
         **{k: (v.copy() if isinstance(v, (list, dict)) else v) for k, v in _CONV_DEFAULTS.items()},
         "_conn_id": session_id,
+        "user_id": connection_get(session_id, "user_id") or "default",
     }
     _conv_sessions[cid] = conv
     _conn_convs.setdefault(session_id, set()).add(cid)
@@ -150,6 +163,7 @@ async def get_or_create_conv_session_async(cid: str, session_id: str) -> dict[st
         conv = {
             **{k: (v.copy() if isinstance(v, (list, dict)) else v) for k, v in _CONV_DEFAULTS.items()},
             "_conn_id": session_id,
+            "user_id": connection_get(session_id, "user_id") or "default",
         }
         # Restore cached state (overwrite defaults with Redis values)
         for key, val in cached.items():
@@ -325,8 +339,10 @@ async def save_conversation(cid: str) -> str | None:
 
     lock = _save_locks.setdefault(cid, asyncio.Lock())
     async with lock:
-        conn_id = cs.get("_conn_id")
-        user_id = connection_get(conn_id, "user_id") if conn_id else "default"
+        # Read user_id from the conv session itself — the originating WS
+        # connection may already be destroyed if a task is still running
+        # past a disconnect.
+        user_id = cs.get("user_id") or "default"
         conv_id = cs.get("conversation_id")
         active_model = cs.get("active_model") or settings.model
 

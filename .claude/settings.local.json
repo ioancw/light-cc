@@ -56,7 +56,8 @@
       "Bash(sqlite3 data/lightcc.db \"SELECT name FROM sqlite_master WHERE name LIKE '%api_token%';\")",
       "Bash(sqlite3 *)",
       "Bash(DATABASE_URL=postgresql+asyncpg://test python -c \"from core.config import settings; print\\('db:', settings.database_url\\); print\\('frontend:', settings.server.frontend\\)\")",
-      "Bash(xargs -I {} basename {})"
+      "Bash(xargs -I {} basename {})",
+      "Bash(wait %1)"
     ]
   }
 }

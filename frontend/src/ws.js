@@ -113,8 +113,38 @@ function handleEvent(type, data, cid = null) {
           appState.currentModel = saved;
         }
       }
+      // If a turn was streaming when the socket dropped, resubscribe. The
+      // server replies with generation_state{is_generating} so we can either
+      // keep the spinner (turn still running, events will resume) or clear
+      // it and reload messages from the DB (turn finished while offline).
+      for (const conv of Object.values(appState.conversations)) {
+        if (conv.messages && conv.messages.some(m => m.streaming)) {
+          send('subscribe_cid', {}, conv.id);
+        }
+      }
       fetchConversationHistory();
       break;
+
+    case 'generation_state': {
+      // Server's authoritative view of whether a cid is currently generating.
+      // When the turn has already finished, reload messages from the DB and
+      // clear the stale streaming placeholder.
+      if (!conv) break;
+      if (!data.is_generating) {
+        const streamingMsg = getStreamingMsg(conv);
+        if (streamingMsg) {
+          streamingMsg.streaming = false;
+          if (!streamingMsg.content && (!streamingMsg.toolCalls || streamingMsg.toolCalls.length === 0)) {
+            // Empty placeholder -- drop it so the server-loaded messages don't duplicate.
+            conv.messages = conv.messages.filter(m => m !== streamingMsg);
+          }
+        }
+        if (conv.serverId) {
+          send('resume_conversation', { conversation_id: conv.serverId }, conv.id);
+        }
+      }
+      break;
+    }
 
     case 'model_changed':
       if (data.model) {
@@ -147,6 +177,19 @@ function handleEvent(type, data, cid = null) {
           model: m.model || null,
           streaming: false,
         }));
+        // Server says the cid is still generating -- add a streaming
+        // placeholder so incoming text_delta/tool_start events have a
+        // destination. This is the reconnect-into-a-live-turn path.
+        if (data.is_generating) {
+          conv.messages.push({
+            role: 'assistant',
+            content: '',
+            id: 'msg_' + Date.now(),
+            toolCalls: [],
+            streaming: true,
+            timestamp: Date.now(),
+          });
+        }
       }
       if (data.context_tokens != null && conv) {
         conv.totalTokens = data.context_tokens;

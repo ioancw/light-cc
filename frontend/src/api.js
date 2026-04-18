@@ -69,6 +69,7 @@ export async function fetchConversationHistory(query) {
           local.title = sc.title;
         }
         local.updatedAt = new Date(sc.updated_at).getTime();
+        local.generating = !!sc.generating;
       } else {
         // Not loaded locally -- add as a stub (no messages until clicked)
         const localId = 'srv_' + sc.id;
@@ -84,7 +85,10 @@ export async function fetchConversationHistory(query) {
             pinned: false,
             totalTokens: 0,
             stub: true, // not yet loaded from server
+            generating: !!sc.generating,
           };
+        } else {
+          appState.conversations[localId].generating = !!sc.generating;
         }
       }
     }

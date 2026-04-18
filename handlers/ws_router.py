@@ -13,6 +13,7 @@ from typing import Any
 
 from fastapi import WebSocket, WebSocketDisconnect
 
+from core import agent_runs
 from core.auth import decode_token, get_user_by_id, is_token_revoked
 from core.config import settings
 from core.database import get_db
@@ -110,14 +111,12 @@ async def websocket_endpoint(
     if has_hooks("SessionStart"):
         await fire_hooks("SessionStart", {"session_id": session_id, "user_id": user_id})
 
-    # Per-connection state
-    pending_permissions: dict[str, dict[str, asyncio.Future]] = {}
-    agent_tasks: dict[str, asyncio.Task] = {}
     MAX_CONCURRENT_AGENTS = 3
 
     # ── Send helpers ──
 
     async def send_event(event_type: str, data: dict[str, Any], cid: str | None = None) -> None:
+        """Send a single event directly to this WebSocket."""
         try:
             msg: dict[str, Any] = {"type": event_type, "data": data}
             if cid:
@@ -126,9 +125,21 @@ async def websocket_endpoint(
         except Exception:
             pass
 
-    def make_send_event(cid: str):
+    # Subscriber callback registered with core.agent_runs: delivers
+    # broadcast cid-events to this socket. Keyed as a stable identity so
+    # we can unsubscribe on disconnect.
+    async def ws_subscriber(event_type: str, data: dict[str, Any], cid: str) -> None:
+        await send_event(event_type, data, cid=cid)
+
+    def make_scoped_send(cid: str):
+        """Return a send fn that fans events out to every subscriber of ``cid``.
+
+        This is what the agent handler uses so events survive the originating
+        socket dying mid-turn -- any other client subscribed to this cid will
+        still receive them.
+        """
         async def scoped_send(event_type: str, data: dict[str, Any]) -> None:
-            await send_event(event_type, data, cid=cid)
+            await agent_runs.broadcast(cid, event_type, data)
         return scoped_send
 
     # ── Register notifications ──
@@ -185,11 +196,17 @@ async def websocket_endpoint(
             await send_event("error", {"message": reason}, cid=cid)
             return
 
-        active_count = sum(1 for t in agent_tasks.values() if not t.done())
-        if active_count >= MAX_CONCURRENT_AGENTS:
+        # Rate-limit concurrent agent turns per user across all connections.
+        # Read user_id off the conv session directly — the originating WS
+        # may have disconnected while the task is still running.
+        user_active = sum(
+            1 for active_cid in agent_runs.generating_cids()
+            if conv_session_get(active_cid, "user_id") == user_id
+        )
+        if user_active >= MAX_CONCURRENT_AGENTS:
             await send_event("error", {"message": "Too many active conversations. Please wait for one to finish."}, cid=cid)
             return
-        if cid in agent_tasks and not agent_tasks[cid].done():
+        if agent_runs.is_generating(cid):
             await send_event("error", {"message": "This conversation is already generating."}, cid=cid)
             return
 
@@ -212,39 +229,55 @@ async def websocket_endpoint(
                         cs["conversation_id"] = server_id
                 except Exception as e:
                     logger.debug(f"Failed to recover conversation {server_id}: {e}")
-        scoped_send = make_send_event(cid)
-        cid_perms = pending_permissions.setdefault(cid, {})
+
+        # Subscribe this socket so it receives the events its own message generates.
+        agent_runs.subscribe(cid, ws_subscriber)
+        scoped_send = make_scoped_send(cid)
         task = asyncio.create_task(
             handle_user_message(
-                session_id, cid, data, scoped_send, cid_perms,
+                session_id, cid, data, scoped_send,
                 build_system_prompt=build_system_prompt,
                 outputs_dir=outputs_dir,
             )
         )
-        task.add_done_callback(lambda t, c=cid: agent_tasks.pop(c, None))
-        agent_tasks[cid] = task
+        agent_runs.register_task(cid, task)
+
+    async def _handle_subscribe(cid: str | None) -> None:
+        """Client wants to (re)attach to a cid's event stream.
+
+        Used by a reconnecting tab that had a streaming turn in-flight: the
+        backend kept the task running, the tab resubscribes to pick up the
+        remaining events. Also sends a ``generation_state`` snapshot so the
+        UI can reconcile its local spinner with actual backend state.
+        """
+        if not cid:
+            return
+        agent_runs.subscribe(cid, ws_subscriber)
+        await send_event("generation_state", {
+            "is_generating": agent_runs.is_generating(cid),
+        }, cid=cid)
+
+    async def _handle_unsubscribe(cid: str | None) -> None:
+        if not cid:
+            return
+        agent_runs.unsubscribe(cid, ws_subscriber)
 
     async def _handle_permission_response(cid: str | None, data: dict[str, Any]) -> None:
         req_id = data.get("request_id", "")
-        cid_perms = pending_permissions.get(cid, {}) if cid else {}
-        future = cid_perms.get(req_id)
-        if not future:
-            for perms in pending_permissions.values():
-                future = perms.get(req_id)
-                if future:
-                    break
+        future = None
+        if cid:
+            future = agent_runs.pop_pending_permission(cid, req_id)
+        if future is None:
+            future = agent_runs.find_pending_permission(req_id)
         if future and not future.done():
             future.set_result(data.get("allowed", False))
 
     async def _handle_cancel(cid: str | None) -> None:
         if cid:
-            task = agent_tasks.get(cid)
-            if task and not task.done():
-                task.cancel()
+            agent_runs.cancel_task(cid)
         else:
-            for task in agent_tasks.values():
-                if not task.done():
-                    task.cancel()
+            for active_cid in list(agent_runs.generating_cids()):
+                agent_runs.cancel_task(active_cid)
 
     async def _handle_clear(cid: str | None) -> None:
         if cid and cid in _conv_sessions:
@@ -286,12 +319,17 @@ async def websocket_endpoint(
             except Exception:
                 pass
 
+            # Auto-subscribe so this tab receives events if the cid is currently
+            # generating (or starts generating via a follow-up user message).
+            agent_runs.subscribe(cid, ws_subscriber)
+
             await send_event("conversation_loaded", {
                 "conversation_id": conv_id,
                 "message_count": len(messages),
                 "model": owner_row.model or settings.model,
                 "messages": render_messages,
                 "context_tokens": ctx_tokens,
+                "is_generating": agent_runs.is_generating(cid),
             }, cid=cid)
         except Exception as e:
             logger.error(f"Failed to load conversation {conv_id}: {e}", exc_info=True)
@@ -424,6 +462,10 @@ async def websocket_endpoint(
 
             if event_type == "user_message":
                 await _handle_user_msg(cid, data)
+            elif event_type == "subscribe_cid":
+                await _handle_subscribe(cid)
+            elif event_type == "unsubscribe_cid":
+                await _handle_unsubscribe(cid)
             elif event_type == "permission_response":
                 await _handle_permission_response(cid, data)
             elif event_type == "cancel_generation":
@@ -494,10 +536,12 @@ async def websocket_endpoint(
                 await save_conversation(active_cid)
             except Exception:
                 logger.error(f"Failed to save conversation {active_cid} on disconnect", exc_info=True)
-        # Cancel all running agent tasks
-        for task in agent_tasks.values():
-            if not task.done():
-                task.cancel()
+        # Agent tasks are intentionally NOT cancelled here -- they are keyed
+        # by cid in core.agent_runs and survive a WS drop. A reconnecting
+        # client will resubscribe via `subscribe_cid` or `resume_conversation`.
+        # Just detach this socket from every subscription so broadcast
+        # doesn't fire into a closed connection.
+        agent_runs.unsubscribe_all(ws_subscriber)
         if has_hooks("SessionEnd"):
             try:
                 await fire_hooks("SessionEnd", {"session_id": session_id, "user_id": user_id})

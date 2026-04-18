@@ -25,6 +25,7 @@ class ConversationSummary(BaseModel):
     model: str | None
     created_at: str
     updated_at: str
+    generating: bool = False
 
 
 class ConversationDetail(BaseModel):
@@ -64,6 +65,15 @@ async def list_conversations(
     finally:
         await db.close()
 
+    # A cid can reference a saved conversation as either "srv_<id>" (sidebar
+    # load) or the raw server id (resume paths). Check both forms against the
+    # agent_runs registry so the UI sees the spinner either way.
+    from core import agent_runs
+    generating_cids = agent_runs.generating_cids()
+
+    def _is_generating(conv_id: str) -> bool:
+        return conv_id in generating_cids or f"srv_{conv_id}" in generating_cids
+
     return [
         ConversationSummary(
             id=c.id,
@@ -71,6 +81,7 @@ async def list_conversations(
             model=c.model,
             created_at=c.created_at.isoformat(),
             updated_at=c.updated_at.isoformat(),
+            generating=_is_generating(c.id),
         )
         for c in rows
     ]
