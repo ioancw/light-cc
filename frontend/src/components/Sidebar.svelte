@@ -490,8 +490,6 @@
     letter-spacing: -0.04em;
     line-height: 1;
     flex-shrink: 0;
-    /* Subtle bottom shadow gives the chip a hint of physicality —
-       reads as a pressable "command key" rather than flat decoration. */
     box-shadow: 0 1px 0 color-mix(in srgb, var(--accent) 55%, #000);
     transition: transform 0.15s ease;
   }

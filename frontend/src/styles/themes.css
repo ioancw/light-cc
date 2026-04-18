@@ -35,11 +35,11 @@
 }
 
 [data-theme="light"] {
-  --bg:           #faf7f1;
-  --surface:      #fdfbf6;
-  --surface2:     #efece4;
-  --border:       #e6e0d4;
-  --border2:      #d8d2c4;
+  --bg:           #faf0e6;
+  --surface:      #fdf5ec;
+  --surface2:     #f0e2d2;
+  --border:       #ead9c4;
+  --border2:      #dcc6aa;
   --muted:        #6d6454;
   --dim:          #4e4638;
   --fg:           #4a4138;
