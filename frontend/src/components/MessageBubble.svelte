@@ -152,6 +152,21 @@
     to   { opacity: 1; transform: translateY(0); }
   }
 
+  /* Role-colored left accent — the signature detail. Gives the chat column
+     a rhythm that instantly distinguishes role without relying on bubbles. */
+  .msg-row::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 24px;
+    bottom: 24px;
+    width: 2px;
+    border-radius: 0 1px 1px 0;
+    background: var(--border2);
+  }
+  .msg-row.user-row::before { background: var(--accent); }
+  .msg-row.assistant-row::before { background: var(--accent-soft); opacity: 0.5; }
+
   .msg-row.user-row { background: transparent; }
   .msg-row.assistant-row { background: transparent; }
 
@@ -282,10 +297,18 @@
 
   @media (max-width: 768px) {
     .msg-row {
-      padding: 16px 16px;
-      grid-template-columns: 22px minmax(0, 1fr);
+      padding: 16px 16px 16px 14px;
+      grid-template-columns: 24px minmax(0, 1fr);
       gap: 10px;
     }
-    .msg-avatar { width: 22px; height: 22px; font-size: 10px; }
+    .msg-row::before { top: 16px; bottom: 16px; }
+    .msg-avatar { width: 24px; height: 24px; font-size: 10px; }
+    .msg-actions { opacity: 1; }
+    .msg-action-btn {
+      min-height: 36px;
+      min-width: 44px;
+      padding: 8px 10px;
+      font-size: 13px;
+    }
   }
 </style>

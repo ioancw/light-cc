@@ -284,14 +284,22 @@
     height: 14px;
     border-radius: 6px;
     background: var(--surface2);
-    animation: skeleton-pulse 1.4s ease-in-out infinite;
+    background-image: linear-gradient(
+      90deg,
+      transparent 0%,
+      color-mix(in srgb, var(--fg-dim) 12%, transparent) 50%,
+      transparent 100%
+    );
+    background-size: 200% 100%;
+    background-repeat: no-repeat;
+    animation: skeleton-shimmer 1.8s linear infinite;
   }
   .skeleton-msg.skeleton-user .skeleton-bar {
-    background: var(--border);
+    background-color: var(--border);
   }
-  @keyframes skeleton-pulse {
-    0%, 100% { opacity: 0.4; }
-    50% { opacity: 0.8; }
+  @keyframes skeleton-shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
   }
 
 </style>

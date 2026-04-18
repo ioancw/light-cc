@@ -361,14 +361,20 @@
 <style>
   .tool-block {
     border: none;
+    border-left: 2px solid var(--border2);
     border-radius: 0;
     overflow: hidden;
     background: transparent;
     font-family: var(--font-mono);
+    padding-left: 8px;
+    margin-left: -2px;
+    transition: border-color 0.15s ease, background 0.15s ease;
   }
+  .tool-block:hover { border-left-color: var(--accent-soft); }
+  .tool-block.expanded { border-left-color: var(--accent); }
 
   .tool-header {
-    padding: 5px 4px;
+    padding: 6px 4px;
     display: flex;
     align-items: center;
     gap: 8px;
@@ -380,6 +386,7 @@
     color: inherit;
     font: inherit;
     text-align: left;
+    min-height: 32px;
   }
   .tool-header:hover { background: var(--surface2); border-radius: 4px; }
 
@@ -762,5 +769,45 @@
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
+  }
+
+  @media (max-width: 768px) {
+    .tool-header {
+      padding: 8px 4px;
+      min-height: 40px;
+      flex-wrap: wrap;
+      row-gap: 4px;
+    }
+    .tool-summary {
+      white-space: normal;
+      word-break: break-word;
+      overflow: visible;
+      text-overflow: clip;
+      flex-basis: 100%;
+      order: 99;
+      padding-left: 14px;
+      font-size: 11px;
+      line-height: 1.4;
+    }
+    .tool-name, .tool-result-preview, .tool-duration {
+      font-size: 12px;
+    }
+    .tool-expand-btn {
+      padding: 10px 0;
+      font-size: 11px;
+      min-height: 40px;
+    }
+    .tool-copy-btn {
+      padding: 6px 10px;
+      font-size: 12px;
+      min-height: 32px;
+    }
+    .tool-match-file {
+      max-width: 140px;
+    }
+    .tool-param-row {
+      grid-template-columns: minmax(70px, auto) 1fr;
+      gap: 8px;
+    }
   }
 </style>

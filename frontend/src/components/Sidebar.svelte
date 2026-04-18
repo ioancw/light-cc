@@ -232,9 +232,46 @@
       cancelRename();
     }
   }
+
+  // Swipe-left to close sidebar on mobile.
+  // Only the first touchpoint is tracked — drop multi-touch to avoid fighting
+  // the scrollable chat list pinch-zoom.
+  let swipeStartX = 0;
+  let swipeStartY = 0;
+  let swipeTracking = false;
+
+  function onTouchStart(e) {
+    if (!viewport.isMobile || appState.sidebarCollapsed) return;
+    if (e.touches.length !== 1) return;
+    swipeStartX = e.touches[0].clientX;
+    swipeStartY = e.touches[0].clientY;
+    swipeTracking = true;
+  }
+
+  function onTouchMove(e) {
+    if (!swipeTracking) return;
+    const dx = e.touches[0].clientX - swipeStartX;
+    const dy = Math.abs(e.touches[0].clientY - swipeStartY);
+    // Horizontal left-swipe beats vertical scrolling if we've moved enough.
+    if (dx < -60 && dy < 40) {
+      swipeTracking = false;
+      appState.sidebarCollapsed = true;
+      localStorage.setItem('lcc_sidebar_collapsed', '1');
+    }
+  }
+
+  function onTouchEnd() {
+    swipeTracking = false;
+  }
 </script>
 
-<aside class="sidebar" class:collapsed={appState.sidebarCollapsed}>
+<aside
+  class="sidebar"
+  class:collapsed={appState.sidebarCollapsed}
+  ontouchstart={onTouchStart}
+  ontouchmove={onTouchMove}
+  ontouchend={onTouchEnd}
+>
   <div class="sidebar-header">
     <div class="logo-mark">
       <svg width="12" height="12" viewBox="0 0 32 32" fill="none"><g transform="translate(16,16) scale(1.3) translate(-16,-16)"><path d="M24 4c-3 2-6 5-8 9s-3 8-3.5 11c-.1.8-.2 1.5-.2 2l-.3.5c-.5-.5-1.2-1.5-1.5-3-.4-1.8-.2-4 1-6.5 1.5-3 3-5.5 5-7.5s4-3.5 6-4.5c.5-.2.9-.4 1.2-.5L24 4z" fill="#fff" opacity=".5"/><path d="M24 4c-2 1-4 2.5-6 4.5s-3.5 4.5-5 7.5c-1.2 2.5-1.4 4.7-1 6.5.3 1.5 1 2.5 1.5 3l.3-.5c0-.5.1-1.2.2-2 .5-3 1.5-7 3.5-11s5-7 8-9l.2-.1-.5.1c-.3.1-.7.3-1.2.5z" fill="#fff"/><line x1="12.5" y1="25.5" x2="8" y2="28" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/></g></svg>
@@ -449,11 +486,13 @@
   }
 
   .logo-name {
-    font-size: 14px;
+    font-size: 19px;
     font-weight: 600;
     color: var(--fg-bright);
-    letter-spacing: -0.01em;
-    font-family: var(--font-ui);
+    letter-spacing: -0.02em;
+    font-family: var(--font-prose);
+    font-style: italic;
+    line-height: 1;
   }
 
   .sidebar-close-btn {
@@ -785,10 +824,31 @@
       opacity: 1;
     }
     .sidebar-open-btn {
-      width: 40px;
-      height: 40px;
+      width: 44px;
+      height: 44px;
       top: 2px;
       left: 4px;
+    }
+    .chat-item {
+      padding: 12px 10px;
+      min-height: 44px;
+      font-size: 14px;
+    }
+    .chat-item-delete { opacity: 1; min-width: 32px; min-height: 32px; }
+    .new-chat-btn {
+      padding: 12px;
+      min-height: 44px;
+      font-size: 14px;
+    }
+    .sidebar-action-btn {
+      padding: 10px 8px;
+      min-height: 40px;
+      font-size: 13px;
+    }
+    .sidebar-search input {
+      padding: 10px 12px;
+      font-size: 14px;
+      min-height: 40px;
     }
   }
 </style>

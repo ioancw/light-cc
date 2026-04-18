@@ -259,7 +259,7 @@
       bind:this={textareaEl}
       bind:value={text}
       class="input-textarea"
-      placeholder="Send a message, or type / for commands..."
+      placeholder={viewport.isMobile ? 'Message...' : 'Send a message, or type / for commands...'}
       rows="1"
       oninput={handleInput}
       onkeydown={handleKeydown}
@@ -519,8 +519,14 @@
     }
     .input-hints span:not(:first-child) { display: none; }
     .attach-btn, .send-btn, .stop-btn {
-      width: 40px;
-      height: 40px;
+      width: 44px;
+      height: 44px;
     }
+    .autocomplete-item {
+      padding: 12px 14px;
+      min-height: 44px;
+    }
+    .autocomplete-name { font-size: 13px; }
+    .autocomplete-desc { font-size: 12px; }
   }
 </style>
