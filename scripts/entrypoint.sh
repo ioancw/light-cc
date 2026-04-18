@@ -1,6 +1,9 @@
 #!/bin/bash
 set -e
 
+# Run database migrations
+cd /app && alembic upgrade head
+
 # Auto-generate JWT_SECRET if not set
 if [ -z "$JWT_SECRET" ] || [ "$JWT_SECRET" = "change-me-in-production" ]; then
     export JWT_SECRET=$(python3 -c "import secrets; print(secrets.token_urlsafe(48))")
