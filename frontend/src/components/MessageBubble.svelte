@@ -4,12 +4,35 @@
   import { send } from '../ws.js';
   import { currentConversation } from '../state.svelte.js';
   import ToolCall from './ToolCall.svelte';
+  import ToolGroup from './ToolGroup.svelte';
   import Chart from './renderers/Chart.svelte';
   import D3Chart from './renderers/D3Chart.svelte';
   import Image from './renderers/Image.svelte';
   import Table from './renderers/Table.svelte';
 
   let { msg } = $props();
+
+  // Collapse runs of 3+ consecutive tool calls with the same name into a single
+  // expandable group. Keeps the chat view scannable when e.g. 12 WebSearch
+  // calls back-to-back would otherwise eat the viewport.
+  const GROUP_THRESHOLD = 3;
+  let groupedCalls = $derived.by(() => {
+    const calls = msg.toolCalls || [];
+    const out = [];
+    let i = 0;
+    while (i < calls.length) {
+      let j = i + 1;
+      while (j < calls.length && calls[j].name && calls[j].name === calls[i].name) j++;
+      const run = j - i;
+      if (run >= GROUP_THRESHOLD) {
+        out.push({ kind: 'group', id: `grp_${calls[i].id}`, name: calls[i].name, calls: calls.slice(i, j) });
+      } else {
+        for (let k = i; k < j; k++) out.push({ kind: 'single', id: calls[k].id, tc: calls[k] });
+      }
+      i = j;
+    }
+    return out;
+  });
 
   let bodyEl = $state(null);
   let highlightTimer = null;
@@ -92,8 +115,12 @@
 
     {#if msg.toolCalls && msg.toolCalls.length > 0}
       <div class="tool-calls-container">
-        {#each msg.toolCalls as tc (tc.id)}
-          <ToolCall {tc} />
+        {#each groupedCalls as item (item.id)}
+          {#if item.kind === 'group'}
+            <ToolGroup name={item.name} calls={item.calls} />
+          {:else}
+            <ToolCall tc={item.tc} />
+          {/if}
         {/each}
       </div>
 

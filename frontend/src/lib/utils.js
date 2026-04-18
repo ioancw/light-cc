@@ -51,3 +51,14 @@ export function modelLabel(modelId) {
   }
   return modelId;
 }
+
+// Compact label for tight mobile headers: "claude-sonnet-4-5-latest" -> "S 4.5"
+export function modelShortLabel(modelId) {
+  const parts = modelId.split('-');
+  if (parts[0] === 'claude' && parts.length >= 3) {
+    const fam = parts[1].charAt(0).toUpperCase();
+    const ver = parts.slice(2).filter(p => !/^\d{8}$/.test(p) && p !== 'latest').join('.');
+    return fam + (ver ? ' ' + ver : '');
+  }
+  return modelId.slice(0, 6);
+}

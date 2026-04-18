@@ -2,7 +2,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { appState, newConversation, currentConversation, viewport } from '../state.svelte.js';
   import { connect, disconnect, send } from '../ws.js';
-  import { modelLabel } from '../lib/utils.js';
+  import { modelLabel, modelShortLabel } from '../lib/utils.js';
   import Sidebar from './Sidebar.svelte';
   import ChatArea from './ChatArea.svelte';
   import InputBar from './InputBar.svelte';
@@ -181,8 +181,9 @@
           {/if}
         </div>
         <div class="model-dropdown" bind:this={modelDropdownEl}>
-          <button class="model-trigger" onclick={toggleModelDropdown} class:open={modelDropdownOpen}>
-            <span>{modelLabel(appState.currentModel) || 'Model'}</span>
+          <button class="model-trigger" onclick={toggleModelDropdown} class:open={modelDropdownOpen} aria-label="Model: {modelLabel(appState.currentModel) || 'Model'}">
+            <span class="model-label-long">{modelLabel(appState.currentModel) || 'Model'}</span>
+            <span class="model-label-short">{modelShortLabel(appState.currentModel) || 'M'}</span>
             <svg class="model-chevron" width="8" height="8" viewBox="0 0 10 10" fill="none">
               <path d="M2 4l3 3 3-3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
@@ -353,6 +354,7 @@
     align-items: center;
     gap: 6px;
   }
+  .model-label-short { display: none; }
   .model-trigger:hover {
     border-color: var(--muted);
   }
@@ -437,7 +439,15 @@
     .topbar-btn { width: 36px; height: 36px; }
     .desktop-actions { display: none; }
     .overflow-menu { display: block; }
-    .model-trigger { font-size: 11px; padding: 6px 10px; }
+    .model-trigger {
+      font-size: 11px;
+      padding: 6px 8px;
+      min-height: 36px;
+      letter-spacing: 0.02em;
+      font-variant-numeric: tabular-nums;
+    }
+    .model-label-long { display: none; }
+    .model-label-short { display: inline; font-weight: 600; }
     .model-menu { min-width: 160px; }
   }
 </style>
