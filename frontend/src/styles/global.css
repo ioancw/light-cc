@@ -5,7 +5,16 @@
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-html, body { height: 100%; overflow: hidden; }
+html, body {
+  height: 100%;
+  overflow: hidden;
+  /* Pin the document. Prevents iOS from translating the viewport when the
+     textarea is focused, which otherwise pushes the topbar off-screen. */
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  overscroll-behavior: none;
+}
 
 body {
   background: var(--bg);

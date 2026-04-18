@@ -482,12 +482,14 @@ async def handle_user_message(
         })
     except asyncio.CancelledError:
         logger.info("Agent generation cancelled by user")
+        messages = agent.repair_tool_use_pairs(messages)
         conv_session_set(cid, "messages", messages)
         await save_conversation(cid)
         await send_event("generation_cancelled", {})
     except Exception as e:
         logger.error(f"Agent error: {e}", exc_info=True)
         record_error("agent")
+        messages = agent.repair_tool_use_pairs(messages)
         conv_session_set(cid, "messages", messages)
         await save_conversation(cid)
         await send_event("error", {"message": str(e)})

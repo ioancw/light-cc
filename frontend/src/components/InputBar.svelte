@@ -96,6 +96,21 @@
     updateAutocomplete();
   }
 
+  // iOS Safari tries to "scroll the focused field into view" by translating the
+  // whole document upward, even when body has overflow:hidden. Undo it.
+  function handleFocus() {
+    if (!viewport.isMobile) return;
+    const reset = () => {
+      window.scrollTo(0, 0);
+      document.documentElement.scrollTop = 0;
+      document.body.scrollTop = 0;
+    };
+    reset();
+    requestAnimationFrame(reset);
+    setTimeout(reset, 100);
+    setTimeout(reset, 300);
+  }
+
   function sendMessage() {
     if (isCurrentStreaming()) return;
     if (!appState.connected) return;
@@ -248,6 +263,7 @@
       rows="1"
       oninput={handleInput}
       onkeydown={handleKeydown}
+      onfocus={handleFocus}
     ></textarea>
     <div class="input-footer">
       <div class="input-hints">

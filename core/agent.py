@@ -31,6 +31,64 @@ from tools.registry import execute_tool
 logger = logging.getLogger(__name__)
 
 
+def repair_tool_use_pairs(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Ensure every assistant `tool_use` has a matching `tool_result` after it.
+
+    When a turn is cancelled or a tool-execution exception propagates, the
+    assistant message is already in history but the follow-up user message
+    with `tool_result` blocks is not. The Anthropic API rejects that pairing
+    with a 400. This walks the list and injects synthetic error results for
+    any orphan tool_use ids so the history is always valid to resend.
+    """
+    repaired: list[dict[str, Any]] = []
+    for i, msg in enumerate(messages):
+        repaired.append(msg)
+        if msg.get("role") != "assistant":
+            continue
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        tool_use_ids = [b["id"] for b in content if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("id")]
+        if not tool_use_ids:
+            continue
+
+        next_msg = messages[i + 1] if i + 1 < len(messages) else None
+        covered: set[str] = set()
+        if next_msg and next_msg.get("role") == "user":
+            next_content = next_msg.get("content")
+            if isinstance(next_content, list):
+                for b in next_content:
+                    if isinstance(b, dict) and b.get("type") == "tool_result" and b.get("tool_use_id"):
+                        covered.add(b["tool_use_id"])
+
+        missing = [tid for tid in tool_use_ids if tid not in covered]
+        if not missing:
+            continue
+
+        synthetic_blocks = [
+            {
+                "type": "tool_result",
+                "tool_use_id": tid,
+                "content": json.dumps({"error": "Tool execution was interrupted."}),
+                "is_error": True,
+            }
+            for tid in missing
+        ]
+
+        if next_msg and next_msg.get("role") == "user":
+            nc = next_msg.get("content")
+            if isinstance(nc, list):
+                next_msg["content"] = synthetic_blocks + list(nc)
+            elif isinstance(nc, str):
+                next_msg["content"] = synthetic_blocks + [{"type": "text", "text": nc}]
+            else:
+                next_msg["content"] = synthetic_blocks
+        else:
+            repaired.append({"role": "user", "content": synthetic_blocks})
+
+    return repaired
+
+
 async def run(
     messages: list[dict[str, Any]],
     tools: list[dict[str, Any]],
@@ -79,6 +137,11 @@ async def run(
     def _clean_messages(msgs: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Strip non-API fields (timestamp, model, etc.) before sending to Claude."""
         return [{k: v for k, v in m.items() if k in _API_MSG_KEYS} for m in msgs]
+
+    # Repair history in-place so a prior interrupted turn (cancellation or
+    # tool-exec error) doesn't leave a `tool_use` dangling without a
+    # `tool_result` — the API rejects that with a 400.
+    messages = repair_tool_use_pairs(messages)
 
     while remaining > 0:
         remaining -= 1

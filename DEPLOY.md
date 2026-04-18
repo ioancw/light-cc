@@ -33,10 +33,20 @@ Wait for propagation — `dig +short lightcc.example.com` should return your VPS
 
 ## 3. Install Docker on the VPS
 
+Ubuntu's default repos split the compose plugin out, so use Docker's official repo (ships Engine + Compose together):
+
 ```bash
 ssh root@<vps-ip>
 apt update && apt upgrade -y
-apt install -y docker.io docker-compose-plugin git
+apt install -y git ufw ca-certificates curl gnupg
+
+install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+chmod a+r /etc/apt/keyrings/docker.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" > /etc/apt/sources.list.d/docker.list
+
+apt update
+apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 systemctl enable --now docker
 ```
 
@@ -167,6 +177,18 @@ Restart the app. You can still create users via the admin UI or direct DB insert
 - [ ] Backup file appears in `/opt/light_cc/backups/` within 24h
 - [ ] `docker compose logs` shows no recurring errors
 - [ ] Off-host backup rsync is scheduled (cron or manual)
+
+## Gotchas learned from the first deploy (2026-04-18)
+
+Fixed in-tree now, but worth flagging for future SQLite→Postgres deploys:
+
+- **`requirements.lock` can be a Windows trap.** A `pip freeze` from a conda env embeds `@ file:///C:/...` paths that fail on Linux. The Dockerfile installs from `requirements.txt` for that reason. If you regenerate a lock file, do it from inside a clean Linux container.
+- **Migrations must actually be Postgres-compatible.** SQLite will silently swallow things Postgres won't:
+  - `PRAGMA table_info(...)` → use `sa.inspect(conn).get_columns(...)`.
+  - Boolean `server_default=sa.text("1"|"0")` → Postgres needs `sa.text("true"|"false")`.
+  - Defensive column checks on missing tables → SQLite returns empty, Postgres raises `NoSuchTableError`.
+- **Don't rely on `Base.metadata.create_all()` at boot.** Any table in `core/db_models.py` must have a migration that creates it; `create_all` just masks the gap on SQLite. Diff models vs the migration chain before shipping.
+- **The entrypoint runs `alembic upgrade head` on boot** (see `scripts/entrypoint.sh`). If you fork the entrypoint, keep that line.
 
 ## Troubleshooting
 
