@@ -160,7 +160,10 @@ async def update_conversation(
         if values:
             await db.execute(
                 update(Conversation)
-                .where(Conversation.id == conversation_id)
+                .where(
+                    Conversation.id == conversation_id,
+                    Conversation.user_id == user.id,
+                )
                 .values(**values)
             )
             await db.commit()
@@ -199,7 +202,10 @@ async def delete_conversation(conversation_id: str, user: User = Depends(get_cur
 
         await db.execute(
             update(Conversation)
-            .where(Conversation.id == conversation_id)
+            .where(
+                Conversation.id == conversation_id,
+                Conversation.user_id == user.id,
+            )
             .values(is_deleted=True)
         )
         await db.commit()
