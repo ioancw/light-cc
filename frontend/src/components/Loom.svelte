@@ -426,8 +426,8 @@
       grid-template-columns: 1fr;
     }
     .topbar {
-      padding: 0 12px;
-      height: 48px;
+      padding: 0 12px 0 56px;
+      height: 52px;
       grid-template-columns: minmax(0, 1fr) auto;
       gap: 8px;
     }

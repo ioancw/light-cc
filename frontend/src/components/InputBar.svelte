@@ -517,7 +517,8 @@
       padding: 10px 12px 8px;
       font-size: 16px; /* prevents iOS from zooming when the field is focused */
     }
-    .input-hints span:not(:first-child) { display: none; }
+    .input-hints span { display: none; }
+    .input-hints .scroll-hint { display: flex; }
     .attach-btn, .send-btn, .stop-btn {
       width: 44px;
       height: 44px;
