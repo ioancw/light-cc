@@ -11,7 +11,14 @@ from core.db_models import Base
 
 logger = logging.getLogger(__name__)
 
-_engine = create_async_engine(settings.database_url, echo=False)
+# 30s command timeout for asyncpg so a stuck DB connection can't hang the
+# event loop indefinitely. SQLite/aiosqlite doesn't support this arg, so only
+# set it when we're talking to Postgres.
+_engine_kwargs: dict = {"echo": False}
+if "postgresql" in settings.database_url or "postgres" in settings.database_url:
+    _engine_kwargs["connect_args"] = {"command_timeout": 30}
+
+_engine = create_async_engine(settings.database_url, **_engine_kwargs)
 _session_factory = async_sessionmaker(_engine, class_=AsyncSession, expire_on_commit=False)
 
 

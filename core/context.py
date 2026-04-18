@@ -104,13 +104,24 @@ async def compress_if_needed(
     except Exception:
         pass  # Non-critical -- proceed with compression anyway
 
-    # Split: old messages to compress + recent messages to keep
+    # Split: old messages to compress + recent messages to keep.
+    # The boundary must NOT fall between an assistant(tool_use) and its
+    # user(tool_result) — that would orphan a tool_result block in the kept
+    # section, which the API rejects with a 400.
     keep_count = keep_recent * 2
     if len(messages) <= keep_count:
         return messages
 
-    old_messages = messages[:-keep_count]
-    recent_messages = messages[-keep_count:]
+    split = len(messages) - keep_count
+    while split < len(messages) and _starts_with_tool_result(messages[split]):
+        split += 1
+    if split >= len(messages):
+        # Every candidate boundary lands on a tool_result — safer to bail
+        # than to lose all recent context.
+        return messages
+
+    old_messages = messages[:split]
+    recent_messages = messages[split:]
 
     summary_text = _format_for_summary(old_messages)
 
@@ -192,6 +203,18 @@ async def get_context_breakdown(
         "max_tokens": max_tokens,
         "usage_pct": round(total / max_tokens * 100, 1) if max_tokens else 0,
     }
+
+
+def _starts_with_tool_result(msg: dict[str, Any]) -> bool:
+    if msg.get("role") != "user":
+        return False
+    content = msg.get("content")
+    if not isinstance(content, list):
+        return False
+    for b in content:
+        if isinstance(b, dict):
+            return b.get("type") == "tool_result"
+    return False
 
 
 def _format_for_summary(messages: list[dict[str, Any]]) -> str:

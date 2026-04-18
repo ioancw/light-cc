@@ -332,34 +332,40 @@ async def save_conversation(cid: str) -> str | None:
 
         db = await get_db()
         try:
-            if conv_id is None:
-                title = _derive_title(cs["messages"])
-                conv = Conversation(user_id=user_id, title=title, model=active_model)
-                db.add(conv)
-                await db.flush()
-                conv_id = conv.id
-                cs["conversation_id"] = conv_id
-            else:
-                from sqlalchemy import update
-                await db.execute(
-                    update(Conversation)
-                    .where(Conversation.id == conv_id)
-                    .values(model=active_model)
-                )
-                from sqlalchemy import delete
-                await db.execute(delete(Message).where(Message.conversation_id == conv_id))
+            try:
+                if conv_id is None:
+                    title = _derive_title(cs["messages"])
+                    conv = Conversation(user_id=user_id, title=title, model=active_model)
+                    db.add(conv)
+                    await db.flush()
+                    conv_id = conv.id
+                    cs["conversation_id"] = conv_id
+                else:
+                    from sqlalchemy import update
+                    await db.execute(
+                        update(Conversation)
+                        .where(Conversation.id == conv_id)
+                        .values(model=active_model)
+                    )
+                    from sqlalchemy import delete
+                    await db.execute(delete(Message).where(Message.conversation_id == conv_id))
 
-            for msg in cs["messages"]:
-                content = msg.get("content", "")
-                if isinstance(content, list):
-                    content = json.dumps(content)
-                db.add(Message(
-                    conversation_id=conv_id,
-                    role=msg["role"],
-                    content=content if isinstance(content, str) else json.dumps(content),
-                ))
+                for msg in cs["messages"]:
+                    content = msg.get("content", "")
+                    if isinstance(content, list):
+                        content = json.dumps(content)
+                    db.add(Message(
+                        conversation_id=conv_id,
+                        role=msg["role"],
+                        content=content if isinstance(content, str) else json.dumps(content),
+                    ))
 
-            await db.commit()
+                await db.commit()
+            except Exception:
+                # Delete + re-insert must be all-or-nothing so a partial write
+                # can never truncate a conversation's message history.
+                await db.rollback()
+                raise
         finally:
             await db.close()
 
@@ -441,7 +447,7 @@ async def load_conversation(
         result = await db.execute(
             select(Message)
             .where(Message.conversation_id == conversation_id)
-            .order_by(Message.created_at)
+            .order_by(Message.created_at, Message.id)
         )
         rows = result.scalars().all()
     finally:

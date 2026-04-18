@@ -398,9 +398,16 @@ async def handle_user_message(
             val = tool_input.get(key)
             if val and isinstance(val, str):
                 af = conv_session_get(cid, "active_files") or []
-                if val not in af:
-                    af.append(val)
-                    conv_session_set(cid, "active_files", af)
+                if val in af:
+                    # Move to the end so oldest entries fall off first.
+                    af.remove(val)
+                af.append(val)
+                # Cap to the most recently touched 50 — rules matching only
+                # needs a recent window, and unbounded growth balloons the
+                # session state that gets flushed to Redis.
+                if len(af) > 50:
+                    af = af[-50:]
+                conv_session_set(cid, "active_files", af)
                 break
         return tool_id
 

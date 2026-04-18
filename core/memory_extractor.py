@@ -181,7 +181,7 @@ async def extract_memories_from_conversation(
         msg_rows = list((await db.execute(
             select(Message)
             .where(Message.conversation_id == conversation_id)
-            .order_by(Message.created_at)
+            .order_by(Message.created_at, Message.id)
         )).scalars().all())
 
         min_msgs = max(1, int(user.auto_extract_min_messages or 4))
