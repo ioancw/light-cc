@@ -3,7 +3,7 @@
 # Caddy terminates TLS and proxies all traffic to the app container.
 # Auto-obtains and renews Let's Encrypt certificates based on DOMAIN + ADMIN_EMAIL.
 
-{$DOMAIN} {
+{$DOMAIN}, www.{$DOMAIN} {
     # Email for Let's Encrypt account + renewal reminders
     tls {$ADMIN_EMAIL}
 
