@@ -1,6 +1,6 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
-  import { appState, getStreamingMessage, currentConversation, isCurrentStreaming, showToast } from '../state.svelte.js';
+  import { appState, getStreamingMessage, currentConversation, isCurrentStreaming, showToast, viewport } from '../state.svelte.js';
   import { send } from '../ws.js';
   import { uploadFile } from '../api.js';
 
@@ -19,7 +19,8 @@
   function autoResize() {
     if (!textareaEl) return;
     textareaEl.style.height = 'auto';
-    textareaEl.style.height = Math.min(textareaEl.scrollHeight, 200) + 'px';
+    const cap = viewport.isMobile ? 110 : 200;
+    textareaEl.style.height = Math.min(textareaEl.scrollHeight, cap) + 'px';
   }
 
   function updateAutocomplete() {
@@ -496,7 +497,14 @@
       padding: 8px 12px 12px;
       padding-bottom: calc(12px + env(safe-area-inset-bottom));
     }
-    .input-textarea { padding: 10px 12px 8px; font-size: 14px; }
+    .input-textarea {
+      padding: 10px 12px 8px;
+      font-size: 16px; /* prevents iOS from zooming when the field is focused */
+    }
     .input-hints span:not(:first-child) { display: none; }
+    .attach-btn, .send-btn, .stop-btn {
+      width: 40px;
+      height: 40px;
+    }
   }
 </style>
