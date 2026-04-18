@@ -3,7 +3,7 @@ anthropic>=0.40.0
 mcp>=1.26.0
 fastapi>=0.115.0
 uvicorn[standard]>=0.30.0
-pydantic>=2.0.0
+pydantic[email]>=2.0.0
 pyyaml
 python-dotenv
 pandas
