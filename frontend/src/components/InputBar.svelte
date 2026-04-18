@@ -243,7 +243,7 @@
       bind:this={textareaEl}
       bind:value={text}
       class="input-textarea"
-      placeholder="Send a message..."
+      placeholder="Send a message, or type / for commands..."
       rows="1"
       oninput={handleInput}
       onkeydown={handleKeydown}
@@ -492,7 +492,10 @@
   }
 
   @media (max-width: 768px) {
-    .input-area { padding: 8px 12px 12px; }
+    .input-area {
+      padding: 8px 12px 12px;
+      padding-bottom: calc(12px + env(safe-area-inset-bottom));
+    }
     .input-textarea { padding: 10px 12px 8px; font-size: 14px; }
     .input-hints span:not(:first-child) { display: none; }
   }

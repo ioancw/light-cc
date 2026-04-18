@@ -1,9 +1,16 @@
 <script>
-  import { appState, sortedConversations, newConversation, switchConversation } from '../state.svelte.js';
+  import { appState, sortedConversations, newConversation, switchConversation, viewport } from '../state.svelte.js';
   import { fetchConversationHistory, deleteServerConversation, importConversation, renameConversation, searchConversations } from '../api.js';
   import { send } from '../ws.js';
   import { debounce } from '../lib/utils.js';
   import { showToast } from '../state.svelte.js';
+
+  function closeSidebarOnMobile() {
+    if (viewport.isMobile) {
+      appState.sidebarCollapsed = true;
+      localStorage.setItem('lcc_sidebar_collapsed', '1');
+    }
+  }
 
   let searchQuery = $state('');
   let searchResults = $state([]);
@@ -80,6 +87,7 @@
 
   function handleNewChat() {
     newConversation();
+    closeSidebarOnMobile();
   }
 
   function handleSwitchChat(id) {
@@ -105,6 +113,7 @@
     if (conv && conv.serverId && conv.messages.length === 0) {
       send('resume_conversation', { conversation_id: conv.serverId }, conv.serverId);
     }
+    closeSidebarOnMobile();
   }
 
   function handleDelete(id) {
@@ -394,6 +403,14 @@
       <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
     </svg>
   </button>
+{/if}
+
+{#if viewport.isMobile && !appState.sidebarCollapsed}
+  <button
+    class="sidebar-backdrop"
+    aria-label="Close sidebar"
+    onclick={toggleCollapse}
+  ></button>
 {/if}
 
 <style>
@@ -730,17 +747,34 @@
 
   .sidebar-open-btn:hover { border-color: var(--accent); color: var(--fg); }
 
+  .sidebar-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    border: none;
+    padding: 0;
+    margin: 0;
+    z-index: 199;
+    cursor: pointer;
+    animation: backdrop-fade-in 0.15s ease;
+  }
+  @keyframes backdrop-fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
   @media (max-width: 768px) {
     .sidebar {
       position: fixed;
       left: 0; top: 0; bottom: 0;
-      width: 280px;
+      width: min(280px, 85vw);
       z-index: 200;
       transform: translateX(-100%);
       transition: transform 0.2s ease;
       margin-left: 0;
       opacity: 1;
       pointer-events: auto;
+      box-shadow: 4px 0 20px rgba(0, 0, 0, 0.3);
     }
     .sidebar:not(.collapsed) {
       transform: translateX(0);
@@ -749,6 +783,12 @@
       transform: translateX(-100%);
       margin-left: 0;
       opacity: 1;
+    }
+    .sidebar-open-btn {
+      width: 40px;
+      height: 40px;
+      top: 2px;
+      left: 4px;
     }
   }
 </style>

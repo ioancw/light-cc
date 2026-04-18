@@ -179,7 +179,9 @@
     display: grid;
     grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
     grid-template-rows: 100vh;
+    grid-template-rows: 100dvh;
     height: 100vh;
+    height: 100dvh;
     overflow: hidden;
   }
   .app.sidebar-hidden {
@@ -193,6 +195,7 @@
     display: flex;
     flex-direction: column;
     height: 100vh;
+    height: 100dvh;
     min-width: 0;
     overflow: hidden;
     background: var(--bg);

@@ -37,8 +37,12 @@ export const appState = $state({
   // Theme
   theme: localStorage.getItem('lcc_theme') || 'midnight',
 
-  // Sidebar
-  sidebarCollapsed: localStorage.getItem('lcc_sidebar_collapsed') === '1',
+  // Sidebar. Default-collapsed on mobile when no prior preference exists.
+  sidebarCollapsed: (() => {
+    const stored = localStorage.getItem('lcc_sidebar_collapsed');
+    if (stored !== null) return stored === '1';
+    return typeof window !== 'undefined' && window.matchMedia('(max-width: 768px)').matches;
+  })(),
 
   // Toasts (notification messages)
   toasts: [],
@@ -53,6 +57,19 @@ export const appState = $state({
   needsScrollDown: false,
   scrollToBottom: null, // function ref set by ChatArea
 });
+
+// Reactive viewport state. `isMobile` is kept in sync with a matchMedia listener.
+export const viewport = $state({
+  isMobile: typeof window !== 'undefined'
+    ? window.matchMedia('(max-width: 768px)').matches
+    : false,
+});
+if (typeof window !== 'undefined') {
+  const mq = window.matchMedia('(max-width: 768px)');
+  const onChange = (e) => { viewport.isMobile = e.matches; };
+  if (mq.addEventListener) mq.addEventListener('change', onChange);
+  else mq.addListener(onChange);
+}
 
 // Svelte 5 does not allow exporting $derived from modules.
 // Export getter functions instead -- components use these reactively.
