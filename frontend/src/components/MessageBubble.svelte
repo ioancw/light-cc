@@ -94,7 +94,7 @@
   <div class="msg-body" bind:this={bodyEl}>
     <div class="msg-header">
       <span class="msg-role">
-        {msg.role === 'user' ? 'You' : 'Light CC'}
+        {msg.role === 'user' ? 'You' : 'Wiggy'}
       </span>
       {#if msg.model && msg.role === 'assistant'}
         <span class="msg-model">{modelLabel(msg.model)}</span>

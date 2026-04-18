@@ -42,7 +42,7 @@
 <div class="auth-page">
   <div class="auth-card">
     <div class="auth-logo">
-      <h1>&#9670; Light CC</h1>
+      <h1>&#9670; Wiggy</h1>
       <p>AI-powered workspace</p>
     </div>
 

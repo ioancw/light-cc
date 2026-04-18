@@ -141,7 +141,7 @@
       return;
     }
     const md = conv.messages.map(m =>
-      `## ${m.role === 'user' ? 'You' : 'Light CC'}\n\n${m.content}`
+      `## ${m.role === 'user' ? 'You' : 'Wiggy'}\n\n${m.content}`
     ).join('\n\n---\n\n');
     const blob = new Blob([md], { type: 'text/markdown' });
     const a = document.createElement('a');
@@ -274,7 +274,7 @@
 >
   <div class="sidebar-header">
     <span class="logo-chip" aria-hidden="true">/</span>
-    <span class="logo-name">Light CC</span>
+    <span class="logo-name">Wiggy</span>
     <button class="sidebar-close-btn" onclick={toggleCollapse} title="Hide sidebar">&#9664;</button>
   </div>
 
