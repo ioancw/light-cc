@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import asynccontextmanager
 from pathlib import Path
 from unittest.mock import patch
 
@@ -65,8 +66,9 @@ def _write_plugin(plugins_dir: Path, name: str, version: str = "1.0.0") -> Path:
 async def api_client(tmp_path: Path, admin_user, regular_user, test_db):
     """API client bound to a tmp plugins dir and an isolated PluginLoader."""
 
+    @asynccontextmanager
     async def _get_test_db():
-        return test_db
+        yield test_db
 
     plugins_dir = tmp_path / "plugins"
     plugins_dir.mkdir()

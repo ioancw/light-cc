@@ -63,3 +63,16 @@ Drop the agent, and the skill still exists but nothing happens at 8 AM. Drop the
 - **One skill can back many agents** — e.g. `morning-briefing` skill could power one agent on a weekday cron and another triggered by webhook from a team Slack
 
 If agents owned their instructions inline with no skill indirection, you'd copy-paste the procedure every time you wanted a new trigger. Keeping procedures (skills) separate from execution (agents) is the same split as Unix scripts vs crontab entries.
+
+## What about commands?
+
+In CC ≤ 2.0 there was a third top-level category — `commands/*.md` — that
+existed alongside skills and agents. CC 2.1 collapsed that distinction:
+the `/foo` surface dispatches against a single registry, and a
+`commands/` file is just a skill with `disable-model-invocation: true`
+(user-only, never auto-invoked).
+
+Light CC matches that. `commands/*.md` files are still loaded — for
+drop-in compatibility with CC plugins that ship them — but internally
+they're parsed into `SkillDef` rows with `kind="legacy-command"`. There
+are only two abstractions to think about: skills and agents.

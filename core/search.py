@@ -20,8 +20,7 @@ async def search_conversations(user_id: str, query: str, limit: int = 20) -> lis
     query = query.strip()
     pattern = f"%{query}%"
 
-    db = await get_db()
-    try:
+    async with get_db() as db:
         # Find messages matching the query in non-deleted conversations owned by user
         stmt = (
             select(
@@ -46,8 +45,6 @@ async def search_conversations(user_id: str, query: str, limit: int = 20) -> lis
 
         result = await db.execute(stmt)
         rows = result.all()
-    finally:
-        await db.close()
 
     # Group by conversation_id, keep best match per conversation
     seen: set[str] = set()

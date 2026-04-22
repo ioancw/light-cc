@@ -122,6 +122,8 @@ Then open `https://lightcc.example.com` in a browser and log in with `ADMIN_EMAI
 
 ## 8. Operational essentials
 
+> **Day-two guide:** for incident triage, rollback recipes, queue/log filters, JWT rotation details, and scaling notes, see [`docs/OPERATIONS.md`](docs/OPERATIONS.md). This section is the essentials.
+
 ### Logs
 ```bash
 docker compose logs -f app        # application
@@ -182,13 +184,49 @@ Restart the app. You can still create users via the admin UI or direct DB insert
 
 Fixed in-tree now, but worth flagging for future SQLite→Postgres deploys:
 
-- **`requirements.lock` can be a Windows trap.** A `pip freeze` from a conda env embeds `@ file:///C:/...` paths that fail on Linux. The Dockerfile installs from `requirements.txt` for that reason. If you regenerate a lock file, do it from inside a clean Linux container.
+- **`requirements.lock` is gitignored on purpose.** A `pip freeze` from a conda env embeds `@ file:///C:/...` paths and stray host-only packages (`chainlit`, analytics libs) that fail on Linux. The Dockerfile installs from `requirements.txt` so the build isn't affected, but a committed-from-Windows lockfile is actively misleading. Regenerate locally when you need one:
+
+  ```bash
+  docker run --rm -v "$PWD:/w" -w /w python:3.12-slim bash -c \
+    "apt-get update && apt-get install -y --no-install-recommends gcc libpq-dev \
+     && pip install --no-cache-dir -r requirements.txt \
+     && pip freeze" > requirements.lock
+  ```
+
+  If you ever need to track the lockfile (pinned deploys, audit), commit with `git add -f requirements.lock` and remove it from `.gitignore` — but only once you've confirmed no `file://` entries are present.
 - **Migrations must actually be Postgres-compatible.** SQLite will silently swallow things Postgres won't:
   - `PRAGMA table_info(...)` → use `sa.inspect(conn).get_columns(...)`.
   - Boolean `server_default=sa.text("1"|"0")` → Postgres needs `sa.text("true"|"false")`.
   - Defensive column checks on missing tables → SQLite returns empty, Postgres raises `NoSuchTableError`.
 - **Don't rely on `Base.metadata.create_all()` at boot.** Any table in `core/db_models.py` must have a migration that creates it; `create_all` just masks the gap on SQLite. Diff models vs the migration chain before shipping.
 - **The entrypoint runs `alembic upgrade head` on boot** (see `scripts/entrypoint.sh`). If you fork the entrypoint, keep that line.
+- **Secrets are now fail-fast in production** (as of 2026-04-18). The entrypoint refuses to start if `ENV=production` and either `JWT_SECRET` is unset/defaulted or `POSTGRES_PASSWORD="lightcc"`. `docker-compose.yml` additionally refuses to interpolate without `POSTGRES_PASSWORD` set in `.env`. In development (`ENV=development`) JWT_SECRET falls back to a stable value stored at `data/.dev_jwt_secret` so restarts don't log users out — delete that file to rotate. When upgrading an existing prod deploy, set `POSTGRES_PASSWORD` in `.env` **before** `docker compose up` or the stack will fail to start.
+
+## Upgrading from a pre-hardening deploy
+
+The `app` container now runs as a non-root user (uid 10001). The root filesystem is read-only; only `/app/data`, `/app/plugins`, and `/tmp` are writable. If you are upgrading from an older image whose volumes were populated while running as root, re-chown them once on the host before the first restart:
+
+```bash
+docker compose down
+sudo chown -R 10001:10001 /var/lib/docker/volumes/light_cc_app-data/_data
+# plugins volume is new; it will be created on first up with correct ownership
+git pull
+# If POSTGRES_PASSWORD isn't already set in .env (legacy deploys used "lightcc"):
+#   1. Pick a new value, e.g. PG=$(openssl rand -base64 24)
+#   2. Rotate inside the existing postgres container BEFORE bringing it down:
+#        docker compose exec postgres psql -U lightcc -c "ALTER USER lightcc WITH PASSWORD '<new>'"
+#   3. Add POSTGRES_PASSWORD=<new> to .env
+# Otherwise `docker compose up` will fail with "set POSTGRES_PASSWORD in .env".
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+```
+
+Verify hardening after restart:
+```bash
+docker compose exec app id                       # uid=10001 gid=10001
+docker compose exec app touch /readonly_check    # must fail: read-only FS
+docker compose exec app touch /app/data/.writetest && docker compose exec app rm /app/data/.writetest
+curl -sf https://<domain>/health/ready           # still 200
+```
 
 ## Troubleshooting
 

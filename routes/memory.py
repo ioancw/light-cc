@@ -143,13 +143,10 @@ async def api_create_memory(
     )
 
     # Fetch the row back so we return the full detail (including timestamps).
-    db = await get_db()
-    try:
+    async with get_db() as db:
         row = (await db.execute(
             select(Memory).where(Memory.id == mem_id, Memory.user_id == user.id),
         )).scalar_one_or_none()
-    finally:
-        await db.close()
     if row is None:
         raise HTTPException(status_code=500, detail="Memory saved but could not be retrieved")
     return _detail_from_row(row)
@@ -159,13 +156,10 @@ async def api_create_memory(
 async def api_get_memory(
     memory_id: str, user: UserModel = Depends(get_current_user),
 ):
-    db = await get_db()
-    try:
+    async with get_db() as db:
         row = (await db.execute(
             select(Memory).where(Memory.id == memory_id, Memory.user_id == user.id),
         )).scalar_one_or_none()
-    finally:
-        await db.close()
     if row is None:
         raise HTTPException(status_code=404, detail="Memory not found")
     return _detail_from_row(row)
@@ -190,13 +184,10 @@ async def api_update_memory(
     if not ok:
         raise HTTPException(status_code=404, detail="Memory not found")
 
-    db = await get_db()
-    try:
+    async with get_db() as db:
         row = (await db.execute(
             select(Memory).where(Memory.id == memory_id, Memory.user_id == user.id),
         )).scalar_one_or_none()
-    finally:
-        await db.close()
     if row is None:
         raise HTTPException(status_code=404, detail="Memory not found")
     return _detail_from_row(row)
@@ -230,8 +221,7 @@ async def api_update_settings(
     if not kwargs:
         raise HTTPException(status_code=400, detail="No fields to update")
 
-    db = await get_db()
-    try:
+    async with get_db() as db:
         row = (await db.execute(
             select(UserModel).where(UserModel.id == user.id),
         )).scalar_one_or_none()
@@ -246,5 +236,3 @@ async def api_update_settings(
             auto_extract_model=row.auto_extract_model,
             auto_extract_min_messages=row.auto_extract_min_messages,
         )
-    finally:
-        await db.close()

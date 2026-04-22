@@ -23,6 +23,10 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends gcc libpq-dev curl && \
     rm -rf /var/lib/apt/lists/*
 
+# Non-root runtime user (uid 10001 to avoid host-user collisions)
+RUN groupadd --system --gid 10001 app && \
+    useradd --system --uid 10001 --gid app --home-dir /home/app --create-home --shell /usr/sbin/nologin app
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
@@ -33,8 +37,13 @@ COPY . .
 RUN rm -rf frontend/dist
 COPY --from=frontend-build /build/dist ./frontend/dist
 
-# Create data directory for SQLite fallback / file uploads
-RUN mkdir -p data/users
+# Runtime-writable directories (volume mounts cover these in prod)
+RUN mkdir -p data/users plugins && chown -R app:app /app
+
+# No .pyc clutter — keeps read-only root filesystems happy
+ENV PYTHONDONTWRITEBYTECODE=1
+
+USER app
 
 EXPOSE 8000
 

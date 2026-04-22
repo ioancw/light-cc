@@ -934,15 +934,28 @@ async function previewFile(path, name) {
   }
 }
 
-function downloadFile(path) {
+async function downloadFile(path) {
   const token = localStorage.getItem('lcc_access_token');
-  // Create a temporary link to trigger download
-  const a = document.createElement('a');
-  a.href = `/api/files/download?path=${encodeURIComponent(path)}&token=${encodeURIComponent(token)}`;
-  a.download = path.split('/').pop() || 'file';
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
+  try {
+    const resp = await fetch('/api/files/download-url', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ path }),
+    });
+    if (!resp.ok) throw new Error(await resp.text());
+    const { url } = await resp.json();
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = path.split('/').pop() || 'file';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  } catch (e) {
+    showToast(`Download failed: ${e.message}`, 'error');
+  }
 }
 
 async function uploadFile() {

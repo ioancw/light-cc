@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import asynccontextmanager
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -244,8 +245,9 @@ class TestPluginAgents:
         from sqlalchemy import select
         from core.db_models import AgentDefinition
 
+        @asynccontextmanager
         async def _get_test_db():
-            return test_db
+            yield test_db
 
         loader = PluginLoader()
         with patch("core.database.get_db", side_effect=_get_test_db):
@@ -267,8 +269,9 @@ class TestPluginAgents:
         from sqlalchemy import select
         from core.db_models import AgentDefinition
 
+        @asynccontextmanager
         async def _get_test_db():
-            return test_db
+            yield test_db
 
         loader = PluginLoader()
         with patch("core.database.get_db", side_effect=_get_test_db):
@@ -297,8 +300,9 @@ class TestPluginAgents:
         test_db.add(existing)
         await test_db.commit()
 
+        @asynccontextmanager
         async def _get_test_db():
-            return test_db
+            yield test_db
 
         loader = PluginLoader()
         with patch("core.database.get_db", side_effect=_get_test_db):

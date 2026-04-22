@@ -47,8 +47,19 @@ class ProviderConfig(BaseModel):
 
 class AuthConfig(BaseModel):
     registration_enabled: bool = True
-    jwt_expiry_hours: int = 1
+    # 15-minute access tokens — the refresh flow covers the rotation so a
+    # stolen access token has a small blast radius.
+    jwt_expiry_hours: float = 0.25
     jwt_refresh_expiry_days: int = 7
+
+
+class FilesConfig(BaseModel):
+    max_upload_mb: int = 25
+    download_url_ttl_seconds: int = 60
+    # Extensions that get served inline as HTML by most browsers.
+    blocked_extensions: list[str] = Field(default_factory=lambda: [
+        ".html", ".htm", ".svg", ".xml", ".js", ".mjs", ".xhtml",
+    ])
 
 
 class Settings(BaseModel):
@@ -81,6 +92,7 @@ class Settings(BaseModel):
     paths: PathsConfig = Field(default_factory=PathsConfig)
     server: ServerConfig = Field(default_factory=ServerConfig)
     auth: AuthConfig = Field(default_factory=AuthConfig)
+    files: FilesConfig = Field(default_factory=FilesConfig)
     # Suggestion chips shown on the new-chat empty state.
     # Each entry: {"label": "display text", "prompt": "actual message sent"}
     # If prompt starts with "/" it invokes the matching skill/command.
@@ -141,6 +153,30 @@ class Settings(BaseModel):
                 "Using default JWT_SECRET — set JWT_SECRET env var before deploying.",
                 stacklevel=2,
             )
+        return self
+
+    @model_validator(mode="after")
+    def _check_allowed_origins(self) -> "Settings":
+        env = os.environ.get("ENV", "development").lower()
+        if env in ("production", "prod"):
+            if "*" in self.server.allowed_origins:
+                domain = os.environ.get("DOMAIN", "").strip()
+                # If DOMAIN is set we auto-populate a safe default; otherwise refuse.
+                if domain:
+                    self.server.allowed_origins = [
+                        f"https://{domain}",
+                        f"https://www.{domain}",
+                    ]
+                    warnings.warn(
+                        f"server.allowed_origins contained '*' in production; "
+                        f"auto-replacing with https://{domain} + https://www.{domain}.",
+                        stacklevel=2,
+                    )
+                else:
+                    raise ValueError(
+                        "server.allowed_origins must not contain '*' in production. "
+                        "Set DOMAIN env var or list exact origins in config.yaml."
+                    )
         return self
 
 

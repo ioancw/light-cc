@@ -157,8 +157,7 @@ async def extract_memories_from_conversation(
     failure paths (logs at debug level) — this runs in the background
     and must never take down a request.
     """
-    db = await get_db()
-    try:
+    async with get_db() as db:
         user = (await db.execute(
             select(User).where(User.id == user_id)
         )).scalar_one_or_none()
@@ -202,8 +201,6 @@ async def extract_memories_from_conversation(
             if text:
                 transcript_lines.append(f"{m.role.upper()}: {text}")
         transcript = "\n\n".join(transcript_lines)
-    finally:
-        await db.close()
 
     if not transcript:
         return 0
@@ -245,8 +242,7 @@ async def extract_memories_from_conversation(
     # AuditEvent for provenance
     if saved:
         try:
-            db = await get_db()
-            try:
+            async with get_db() as db:
                 db.add(AuditEvent(
                     user_id=user_id,
                     tool_name="auto_memory_extract",
@@ -254,8 +250,6 @@ async def extract_memories_from_conversation(
                     success=True,
                 ))
                 await db.commit()
-            finally:
-                await db.close()
         except Exception as e:
             logger.debug(f"auto-extract: audit log failed: {e}")
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from unittest.mock import patch
 
 import pytest
@@ -24,8 +25,9 @@ from core.db_models import AgentDefinition, AgentRun
 async def agent_db(test_db: AsyncSession, test_user):
     """Patch core.agent_crud.get_db (and agent_runner.get_db) to return test session."""
 
+    @asynccontextmanager
     async def _get_test_db():
-        return test_db
+        yield test_db
 
     with patch("core.agent_crud.get_db", side_effect=_get_test_db):
         yield test_db, test_user

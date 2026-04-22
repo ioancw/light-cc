@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -28,8 +29,9 @@ async def api_client(test_db: AsyncSession, test_user):
       execute an agent (we just verify the AgentRun row is created).
     """
 
+    @asynccontextmanager
     async def _get_test_db():
-        return test_db
+        yield test_db
 
     app = FastAPI()
     app.include_router(agents_router)

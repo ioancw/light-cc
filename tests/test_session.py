@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 import pytest
 import pytest_asyncio
 
@@ -222,8 +224,9 @@ class TestMaybeEnqueueExtract:
         async def _fake_enqueue(name, **kwargs):
             calls.append((name, kwargs))
 
+        @asynccontextmanager
         async def _fake_get_db():
-            return test_db
+            yield test_db
 
         monkeypatch.setattr("core.job_queue.enqueue", _fake_enqueue)
         monkeypatch.setattr("core.database.get_db", _fake_get_db)
@@ -247,8 +250,9 @@ class TestMaybeEnqueueExtract:
         async def _fake_enqueue(name, **kwargs):
             calls.append((name, kwargs))
 
+        @asynccontextmanager
         async def _fake_get_db():
-            return test_db
+            yield test_db
 
         monkeypatch.setattr("core.job_queue.enqueue", _fake_enqueue)
         monkeypatch.setattr("core.database.get_db", _fake_get_db)
@@ -273,8 +277,9 @@ class TestMaybeEnqueueExtract:
         async def _fake_enqueue(name, **kwargs):
             calls.append((name, kwargs))
 
+        @asynccontextmanager
         async def _fake_get_db():
-            return test_db
+            yield test_db
 
         monkeypatch.setattr("core.job_queue.enqueue", _fake_enqueue)
         monkeypatch.setattr("core.database.get_db", _fake_get_db)
@@ -305,8 +310,9 @@ class TestMaybeEnqueueExtract:
         async def _fake_enqueue(name, **kwargs):
             calls.append((name, kwargs))
 
+        @asynccontextmanager
         async def _fake_get_db():
-            return test_db
+            yield test_db
 
         monkeypatch.setattr("core.job_queue.enqueue", _fake_enqueue)
         monkeypatch.setattr("core.database.get_db", _fake_get_db)

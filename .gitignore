@@ -11,3 +11,9 @@ build/
 node_modules/
 frontend/dist/
 frontend/.vite/
+
+# Python lockfile is regenerated inside the Linux Docker image — see
+# DEPLOY.md "Regenerating the Python lockfile". Committing a local
+# (especially Anaconda/Windows) freeze pollutes it with host-specific
+# file:// paths, so keep it local-only until you run the Docker regen.
+requirements.lock

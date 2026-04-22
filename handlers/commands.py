@@ -25,14 +25,28 @@ def _get_project_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
-async def handle_plugin_command(args: str) -> str:
-    """Handle /plugin install|list|uninstall commands."""
+_ADMIN_SUBCOMMANDS = {"install", "update", "uninstall", "remove"}
+
+
+async def handle_plugin_command(args: str, *, user_is_admin: bool = False) -> str:
+    """Handle /plugin install|list|uninstall commands.
+
+    install/update/uninstall are admin-only — they clone code and copy it into
+    the project tree, which is effectively arbitrary code execution.
+    """
     import shutil
     import subprocess as _sp
 
     parts = args.strip().split(None, 1)
     subcommand = parts[0].lower() if parts else ""
     sub_args = parts[1].strip() if len(parts) > 1 else ""
+
+    if subcommand in _ADMIN_SUBCOMMANDS and not user_is_admin:
+        return (
+            f"Permission denied: `/plugin {subcommand}` is restricted to administrators. "
+            "Contact an admin to install or update plugins."
+        )
+
     loader = get_plugin_loader()
     plugins_dir = _get_project_root() / "plugins"
     plugins_dir.mkdir(exist_ok=True)
@@ -96,6 +110,14 @@ async def handle_plugin_command(args: str) -> str:
         if not manifest.exists():
             shutil.rmtree(target_dir, ignore_errors=True)
             return f"Cloned `{repo_name}` but no `.claude-plugin/plugin.json` found. Removed."
+
+        # Refuse cloned trees that contain symlinks — same rule as plugin_manager.
+        from core.plugin_manager import _reject_symlinks, PluginError
+        try:
+            _reject_symlinks(target_dir)
+        except PluginError as e:
+            shutil.rmtree(target_dir, ignore_errors=True)
+            return f"Rejected `{repo_name}`: {e}"
 
         info = await loader.load_plugin(target_dir)
         if not info:
@@ -378,3 +400,330 @@ async def handle_schedule_command(args: str, user_id: str) -> str:
             "Prompts starting with `/` will use the matching skill or command. "
             "Plain text prompts run a general-purpose agent with full tool access."
         )
+
+
+def _agent_source_label(source: str) -> str:
+    """Human-readable source label. ``plugin:foo`` collapses to ``foo``."""
+    if source.startswith("plugin:"):
+        return f"plugin ({source.split(':', 1)[1]})"
+    if source == "yaml":
+        return "yaml (agents/<name>/AGENT.md)"
+    if source == "user":
+        return "user"
+    return source or "unknown"
+
+
+async def list_agents_for_client(user_id: str) -> list[dict[str, str]]:
+    """Build the agents-roster payload sent over WS for the `@agent-` picker.
+
+    Filters to enabled agents only -- a disabled agent in the picker would
+    just produce a dispatch error, which is worse than not listing it. The
+    `name` field is the literal token the user types after `@agent-`, so
+    plugin agents (whose `AgentDefinition.name` already carries the
+    `<plugin>:<name>` colon namespace) flow through unchanged.
+    """
+    from core.agent_crud import list_agents
+
+    try:
+        agents = await list_agents(user_id)
+    except Exception:
+        # Picker is best-effort; never break the WS handshake on a DB hiccup.
+        return []
+    return [
+        {
+            "name": a.name,
+            "description": a.description or "",
+            "source": a.source or "user",
+        }
+        for a in agents
+        if a.enabled
+    ]
+
+
+def _resolve_agent_arg(name_or_id: str, agents: list) -> "AgentDefinition | None":  # noqa: F821
+    """Resolve an agent by name OR by id-prefix (matches /schedule's pattern)."""
+    needle = name_or_id.strip()
+    for a in agents:
+        if a.name == needle or a.id == needle or a.id.startswith(needle):
+            return a
+    return None
+
+
+async def handle_agents_command(args: str, user_id: str) -> str:
+    """Handle ``/agents`` (bare list + ``enable`` / ``disable`` / ``show``).
+
+    Parity with CC's built-in ``/agents``: prints the roster grouped by
+    source so the user can tell user-authored, project, and plugin-shipped
+    agents apart at a glance, with the ``@agent-<name>`` dispatch token
+    next to each row. The ``create`` subcommand is intentionally deferred
+    to W1 (interactive wizard) -- bare ``/agents create`` returns a
+    pointer there.
+    """
+    from core.agent_crud import get_agent_by_name, list_agents, update_agent
+
+    parts = args.strip().split(None, 1)
+    subcommand = parts[0].lower() if parts else ""
+    sub_args = parts[1].strip() if len(parts) > 1 else ""
+
+    if subcommand in ("", "list"):
+        agents = await list_agents(user_id)
+        if not agents:
+            return (
+                "No agents yet.\n\n"
+                "Create one with `/agents create <name>` (coming soon -- "
+                "for now, drop an `AGENT.md` into `agents/<name>/`)."
+            )
+
+        # Group by source so user-edited, project-yaml, and plugin agents
+        # are visually separated. Within a group, sort by name.
+        from collections import defaultdict
+        groups: dict[str, list] = defaultdict(list)
+        for a in agents:
+            groups[a.source or "user"].append(a)
+        for src in groups:
+            groups[src].sort(key=lambda a: a.name)
+
+        # Stable group ordering: user first, then yaml, then plugins alphabetically.
+        def _group_sort_key(src: str) -> tuple[int, str]:
+            if src == "user":
+                return (0, "")
+            if src == "yaml":
+                return (1, "")
+            return (2, src)
+
+        lines = ["**Agents**\n"]
+        for src in sorted(groups.keys(), key=_group_sort_key):
+            lines.append(f"\n_{_agent_source_label(src)}_")
+            for a in groups[src]:
+                state = "" if a.enabled else " _(disabled)_"
+                model = f" · model: `{a.model}`" if a.model else ""
+                lines.append(
+                    f"- **{a.name}**{state} -- {a.description}{model}\n"
+                    f"  Dispatch: `@agent-{a.name} <prompt>`"
+                )
+        lines.append("\n_Subcommands: `/agents show <name>`, `/agents enable <name>`, `/agents disable <name>`._")
+        return "\n".join(lines)
+
+    if subcommand == "show":
+        if not sub_args:
+            return "Usage: `/agents show <name>`"
+        agent = await get_agent_by_name(sub_args, user_id)
+        if not agent:
+            agents = await list_agents(user_id)
+            agent = _resolve_agent_arg(sub_args, agents)
+        if not agent:
+            return f"Agent `{sub_args}` not found. Try `/agents` to see available names."
+        tools_label = ", ".join(agent.tools_list or []) or "(inherits all)"
+        skills_label = ", ".join(agent.skills_list or []) or "(inherits all)"
+        model_label = agent.model or "(inherits session default)"
+        state_label = "enabled" if agent.enabled else "disabled"
+        return (
+            f"**Agent: {agent.name}**\n\n"
+            f"- **Source:** {_agent_source_label(agent.source or 'user')}\n"
+            f"- **State:** {state_label}\n"
+            f"- **Description:** {agent.description}\n"
+            f"- **Model:** {model_label}\n"
+            f"- **Tools:** {tools_label}\n"
+            f"- **Skills:** {skills_label}\n"
+            f"- **Memory scope:** {agent.memory_scope}\n"
+            f"- **Max turns / timeout:** {agent.max_turns} / {agent.timeout_seconds}s\n"
+            f"- **Dispatch:** `@agent-{agent.name} <prompt>`\n\n"
+            f"**System prompt**\n\n```\n{agent.system_prompt}\n```"
+        )
+
+    if subcommand in ("enable", "disable"):
+        if not sub_args:
+            return f"Usage: `/agents {subcommand} <name>`"
+        agent = await get_agent_by_name(sub_args, user_id)
+        if not agent:
+            agents = await list_agents(user_id)
+            agent = _resolve_agent_arg(sub_args, agents)
+        if not agent:
+            return f"Agent `{sub_args}` not found."
+        target = subcommand == "enable"
+        if agent.enabled == target:
+            return f"Agent `{agent.name}` is already {subcommand}d."
+        await update_agent(agent.id, user_id, enabled=target)
+        verb = "enabled" if target else "disabled"
+        hint = f" `@agent-{agent.name}` will now dispatch." if target else (
+            f" `@agent-{agent.name}` will return a disabled-agent error until re-enabled."
+        )
+        return f"Agent `{agent.name}` {verb}.{hint}"
+
+    if subcommand == "create":
+        # The interactive wizard runs in chat -- it needs a live session
+        # to track multi-turn state, so it's wired in handlers/agent_handler.py
+        # directly. Direct callers (tests, scripts) get the manual path.
+        return (
+            "`/agents create [<name>]` runs as an interactive wizard in chat. "
+            "Type it into the chat box to start.\n\n"
+            "Prefer to write the file by hand? Drop `agents/<name>/AGENT.md` "
+            "into your project and run `/reload`."
+        )
+
+    return (
+        "**Agent commands**\n\n"
+        "- `/agents` -- list agents grouped by source (user / yaml / plugin)\n"
+        "- `/agents show <name>` -- dump the agent's full definition + system prompt\n"
+        "- `/agents enable <name>` -- re-enable a disabled agent\n"
+        "- `/agents disable <name>` -- disable so `@agent-<name>` short-circuits with an error\n"
+        "- `/agents create <name>` -- (coming soon) interactive wizard\n\n"
+        "Dispatch any agent in chat with `@agent-<name> <prompt>`."
+    )
+
+
+def _skill_source_label(skill) -> str:  # noqa: ANN001
+    """Human-readable source label for a SkillDef.
+
+    Plugin-namespaced skills (``plugin:name``) collapse to ``plugin (name)``.
+    Otherwise we fall back to the parent directory of ``skill_dir`` so
+    project-vs-personal-vs-plugin shows up in the listing.
+    """
+    if ":" in skill.name:
+        plugin = skill.name.split(":", 1)[0]
+        return f"plugin ({plugin})"
+    if skill.kind == "legacy-command":
+        return "legacy command"
+    sd = (skill.skill_dir or "").replace("\\", "/")
+    if "/plugins/" in sd:
+        return "plugin"
+    if "/.claude/skills" in sd:
+        return ".claude/skills"
+    if sd.endswith("/skills") or "/skills/" in sd:
+        return "skills/"
+    return "user"
+
+
+async def handle_skills_command(args: str, user_id: str) -> str:
+    """Handle ``/skills`` (bare list + ``show`` / ``enable`` / ``disable``).
+
+    Mirrors ``/agents``: roster grouped by source, ``show`` dumps the full
+    SKILL.md definition, ``enable`` / ``disable`` flip the on-disk
+    ``user-invocable`` + ``disable-model-invocation`` flags so reload picks
+    them up. ``create`` is intercepted in ``handlers/agent_handler.py`` (it
+    needs the live session_id to drive the wizard).
+    """
+    from pathlib import Path
+    from skills.loader import set_skill_enabled
+    from skills.registry import get_skill, list_skills, reload_skills
+
+    parts = args.strip().split(None, 1)
+    subcommand = parts[0].lower() if parts else ""
+    sub_args = parts[1].strip() if len(parts) > 1 else ""
+
+    if subcommand in ("", "list"):
+        skills = list_skills()
+        if not skills:
+            return (
+                "No skills loaded.\n\n"
+                "Create one with `/skills create <name>` (interactive wizard "
+                "in chat) or drop a `SKILL.md` into `skills/<name>/`."
+            )
+
+        from collections import defaultdict
+        groups: dict[str, list] = defaultdict(list)
+        for s in skills:
+            groups[_skill_source_label(s)].append(s)
+        for src in groups:
+            groups[src].sort(key=lambda s: s.name)
+
+        # Stable ordering: user-authored first, then plugin/legacy, by alpha.
+        def _group_sort_key(src: str) -> tuple[int, str]:
+            if src == "user":
+                return (0, "")
+            if src == "skills/":
+                return (1, "")
+            if src == ".claude/skills":
+                return (2, "")
+            if src == "legacy command":
+                return (3, "")
+            return (4, src)
+
+        lines = ["**Skills**\n"]
+        for src in sorted(groups.keys(), key=_group_sort_key):
+            lines.append(f"\n_{src}_")
+            for s in groups[src]:
+                hidden = "" if s.user_invocable else " _(disabled)_"
+                hint = f" `{s.argument_hint}`" if s.argument_hint else ""
+                lines.append(
+                    f"- **/{s.name}**{hint}{hidden} -- {s.description or '(no description)'}"
+                )
+        lines.append("\n_Subcommands: `/skills show <name>`, `/skills enable <name>`, `/skills disable <name>`, `/skills create <name>`._")
+        return "\n".join(lines)
+
+    if subcommand == "show":
+        if not sub_args:
+            return "Usage: `/skills show <name>`"
+        skill = get_skill(sub_args)
+        if not skill:
+            return f"Skill `{sub_args}` not found. Try `/skills` to see available names."
+        tools_label = ", ".join(skill.tools) if skill.tools else "(inherits all)"
+        state_label = "enabled" if skill.user_invocable else "disabled"
+        model_label = skill.model or "(inherits session default)"
+        argh = f"`{skill.argument_hint}`" if skill.argument_hint else "_(none)_"
+        return (
+            f"**Skill: /{skill.name}**\n\n"
+            f"- **Source:** {_skill_source_label(skill)}\n"
+            f"- **State:** {state_label}\n"
+            f"- **Description:** {skill.description or '(none)'}\n"
+            f"- **Argument hint:** {argh}\n"
+            f"- **Tools:** {tools_label}\n"
+            f"- **Model:** {model_label}\n"
+            f"- **Auto-invoke:** {'no' if skill.disable_model_invocation else 'yes'}\n"
+            f"- **Skill dir:** `{skill.skill_dir or '(unknown)'}`\n\n"
+            f"**Body**\n\n```\n{skill.prompt}\n```"
+        )
+
+    if subcommand in ("enable", "disable"):
+        if not sub_args:
+            return f"Usage: `/skills {subcommand} <name>`"
+        skill = get_skill(sub_args)
+        if not skill:
+            return f"Skill `{sub_args}` not found."
+        if not skill.skill_dir:
+            return f"Skill `{sub_args}` has no on-disk source -- can't toggle."
+
+        target = subcommand == "enable"
+        if skill.user_invocable == target and not skill.disable_model_invocation == (not target):
+            return f"Skill `/{skill.name}` is already {subcommand}d."
+
+        # Locate the SKILL.md (or first *.md) under skill_dir.
+        sdir = Path(skill.skill_dir)
+        candidates = [sdir / "SKILL.md"]
+        candidates += sorted(sdir.glob("*.md"))
+        skill_path = next((p for p in candidates if p.exists()), None)
+        if not skill_path:
+            return f"Couldn't find a markdown file under `{sdir}` to edit."
+
+        try:
+            set_skill_enabled(skill_path, target)
+        except Exception as e:
+            return f"Failed to {subcommand} `/{skill.name}`: {e}"
+
+        reload_skills()
+        verb = "enabled" if target else "disabled"
+        hint = (
+            f" `/{skill.name}` will now appear in autocomplete."
+            if target else
+            f" `/{skill.name}` will no longer appear in `/` autocomplete or auto-match."
+        )
+        return f"Skill `/{skill.name}` {verb}.{hint}"
+
+    if subcommand == "create":
+        # The wizard runs in chat (needs session_id). Direct callers
+        # (tests, scripts) get a chat-pointer + manual path.
+        return (
+            "`/skills create [<name>]` runs as an interactive wizard in chat. "
+            "Type it into the chat box to start.\n\n"
+            "Prefer to write the file by hand? Drop `skills/<name>/SKILL.md` "
+            "into your project and run `/reload`."
+        )
+
+    return (
+        "**Skill commands**\n\n"
+        "- `/skills` -- list skills grouped by source\n"
+        "- `/skills show <name>` -- dump the skill's full definition + body\n"
+        "- `/skills enable <name>` -- re-enable a disabled skill\n"
+        "- `/skills disable <name>` -- hide from `/` autocomplete and disable auto-invoke\n"
+        "- `/skills create <name>` -- interactive wizard (run from chat)\n"
+    )

@@ -157,7 +157,7 @@ class Memory(Base):
 
 class AgentDefinition(Base):
     """Callable agent definition: a named persona with its own system prompt,
-    tool filter, and model. Invoked via the ``Task`` tool from within a
+    tool filter, and model. Invoked via the ``Agent`` tool from within a
     conversation, or via ``POST /api/agents/run`` headlessly.
 
     Agents do NOT have their own trigger/schedule -- that concern lives in

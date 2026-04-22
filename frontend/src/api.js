@@ -1,6 +1,12 @@
 // REST API client for auth, conversations, and files.
 
-import { appState, setAuth, clearAuth } from './state.svelte.js';
+import { appState, setAuth, clearAuth, showToast } from './state.svelte.js';
+
+function logApiError(context, err) {
+  // Background paths call this so a dropped network doesn't become a toast storm.
+  // User-initiated calls add their own toast on top.
+  console.error(`[api] ${context}:`, err);
+}
 
 function authHeaders() {
   const headers = { 'Content-Type': 'application/json' };
@@ -51,7 +57,10 @@ export async function fetchConversationHistory(query) {
     const resp = await fetch(url, {
       headers: { 'Authorization': `Bearer ${appState.authToken}` },
     });
-    if (!resp.ok) return;
+    if (!resp.ok) {
+      logApiError('fetchConversationHistory', `HTTP ${resp.status}`);
+      return;
+    }
     const serverList = await resp.json();
 
     // Build a set of server IDs already loaded locally
@@ -100,39 +109,43 @@ export async function fetchConversationHistory(query) {
         delete appState.conversations[id];
       }
     }
-  } catch {
-    // silently ignore
+  } catch (err) {
+    logApiError('fetchConversationHistory', err);
   }
 }
 
 export async function renameConversation(serverId, title) {
   if (!appState.authToken || !serverId) return;
   try {
-    await fetch(`/api/conversations/${serverId}`, {
+    const resp = await fetch(`/api/conversations/${serverId}`, {
       method: 'PATCH',
       headers: authHeaders(),
       body: JSON.stringify({ title }),
     });
-  } catch {
-    // silently ignore
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  } catch (err) {
+    logApiError('renameConversation', err);
+    showToast('Rename failed', 'error');
   }
 }
 
 export async function deleteServerConversation(serverId) {
   if (!appState.authToken) return;
   try {
-    await fetch(`/api/conversations/${serverId}`, {
+    const resp = await fetch(`/api/conversations/${serverId}`, {
       method: 'DELETE',
       headers: { 'Authorization': `Bearer ${appState.authToken}` },
     });
+    if (!resp.ok && resp.status !== 204) throw new Error(`HTTP ${resp.status}`);
     // Remove all local entries pointing to this server conversation
     for (const [id, c] of Object.entries(appState.conversations)) {
       if (c.serverId === serverId) {
         delete appState.conversations[id];
       }
     }
-  } catch {
-    // silently ignore
+  } catch (err) {
+    logApiError('deleteServerConversation', err);
+    showToast('Delete failed', 'error');
   }
 }
 
@@ -142,9 +155,10 @@ export async function searchConversations(query) {
     const resp = await fetch(`/api/conversations/search?q=${encodeURIComponent(query)}`, {
       headers: { 'Authorization': `Bearer ${appState.authToken}` },
     });
-    if (!resp.ok) return [];
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     return await resp.json();
-  } catch {
+  } catch (err) {
+    logApiError('searchConversations', err);
     return [];
   }
 }
@@ -189,6 +203,19 @@ export async function uploadFile(path, file) {
     method: 'POST',
     headers: { 'Authorization': `Bearer ${appState.authToken}` },
     body: formData,
+  });
+  if (!resp.ok) throw new Error(await resp.text());
+  return resp.json();
+}
+
+export async function getDownloadURL(path) {
+  const resp = await fetch('/api/files/download-url', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${appState.authToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ path }),
   });
   if (!resp.ok) throw new Error(await resp.text());
   return resp.json();

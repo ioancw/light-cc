@@ -110,17 +110,16 @@ async def _execute_schedule(
     current_session_set("user_id", user_id)
     connection_set(session_id, "user_id", user_id)
 
-    db = await get_db()
-    try:
-        run = ScheduleRun(schedule_id=schedule_id, status="running")
-        db.add(run)
-        await db.commit()
-        await db.refresh(run)
-        run_id = run.id
-    except Exception as e:
-        logger.error(f"Failed to create schedule run record: {e}")
-        await db.close()
-        return
+    async with get_db() as _init_db:
+        try:
+            run = ScheduleRun(schedule_id=schedule_id, status="running")
+            _init_db.add(run)
+            await _init_db.commit()
+            await _init_db.refresh(run)
+            run_id = run.id
+        except Exception as e:
+            logger.error(f"Failed to create schedule run record: {e}")
+            return
 
     async def perm_check(tool_name: str, tool_input: dict[str, Any]) -> bool | str:
         if is_blocked(tool_name, tool_input):
@@ -129,21 +128,40 @@ async def _execute_schedule(
             return "DENIED: Risky commands cannot run in scheduled tasks."
         return True
 
-    # Resolve skill/command/agent references in prompt (e.g. "/analyze AAPL").
-    # Agent names win over nothing -- skill and command lookups run first.
+    # Resolve skill/command/agent references in prompt.
+    # Surface matches CC + chat: ``/foo`` is skill-or-command; ``@agent-foo`` is
+    # agent. No cross-category fallback -- a Schedule whose prompt starts with
+    # ``/`` will never escalate to an agent of the same name (use the explicit
+    # ``@agent-`` form for agent dispatch).
     user_text = prompt
     skill_prompt: str | None = None
     tool_filter = None
     delegated_agent = None  # if set, we run this agent instead of the generic loop
     delegated_prompt = ""
 
-    if prompt.strip().startswith("/"):
-        from skills.registry import match_skill_by_name
-        from commands.registry import get_command
+    prompt_stripped = prompt.strip()
+
+    # Module-level regex import kept local to scheduler to avoid widening the
+    # cold-start import graph for code paths that never hit the @agent- form.
+    from handlers.agent_handler import AGENT_MENTION_RE
+    sched_mention = AGENT_MENTION_RE.match(prompt_stripped)
+    if sched_mention:
         from core.agent_crud import get_agent_by_name
+        agent_name = sched_mention.group(1)
+        agent_args = (sched_mention.group(2) or "").strip()
+        maybe_agent = await get_agent_by_name(agent_name, user_id)
+        if maybe_agent and maybe_agent.enabled:
+            delegated_agent = maybe_agent
+            delegated_prompt = agent_args or f"Execute your task ({maybe_agent.name})."
+    elif prompt_stripped.startswith("/"):
+        # Unified resolver: real skills and legacy commands both live in the
+        # skills registry now (commands wrapped as ``kind="legacy-command"``
+        # SkillDefs). Plain ``/foo`` matches whichever exists, with no
+        # cross-category fallback to agents.
+        from skills.registry import match_skill_by_name
         from core.models import resolve_dynamic_content
 
-        tokens = prompt.strip().split(None, 1)
+        tokens = prompt_stripped.split(None, 1)
         slash_name = tokens[0][1:]  # strip leading /
         slash_args = tokens[1] if len(tokens) > 1 else ""
 
@@ -154,19 +172,6 @@ async def _execute_schedule(
             user_text = slash_args or skill.description
             if skill.tools:
                 tool_filter = skill.tools
-        else:
-            cmd = get_command(slash_name)
-            if cmd:
-                skill_prompt = cmd.resolve_arguments(slash_args)
-                skill_prompt = await resolve_dynamic_content(skill_prompt)
-                user_text = slash_args or cmd.description
-            else:
-                # Fall through to AgentDefinition lookup: "/agent-name args"
-                # fires the named agent with args as the invocation prompt.
-                maybe_agent = await get_agent_by_name(slash_name, user_id)
-                if maybe_agent and maybe_agent.enabled:
-                    delegated_agent = maybe_agent
-                    delegated_prompt = slash_args or f"Execute your task ({maybe_agent.name})."
 
     # If this schedule fires an agent, skip the generic loop entirely --
     # run_agent_once owns execution + AgentRun persistence.
@@ -191,26 +196,24 @@ async def _execute_schedule(
             now = datetime.now(timezone.utc)
             logger.error(f"Scheduled agent '{delegated_agent.name}' failed: {e}")
 
-        db2 = await get_db()
-        try:
-            await db2.execute(
-                update(ScheduleRun)
-                .where(ScheduleRun.id == run_id)
-                .values(
-                    status=status, result=result_text, error=error,
-                    finished_at=now, conversation_id=conv_id,
+        async with get_db() as db2:
+            try:
+                await db2.execute(
+                    update(ScheduleRun)
+                    .where(ScheduleRun.id == run_id)
+                    .values(
+                        status=status, result=result_text, error=error,
+                        finished_at=now, conversation_id=conv_id,
+                    )
                 )
-            )
-            await db2.execute(
-                update(Schedule)
-                .where(Schedule.id == schedule_id)
-                .values(last_run_at=now, next_run_at=_compute_next_run(cron_expression, now, user_timezone))
-            )
-            await db2.commit()
-        except Exception as e:
-            logger.error(f"Failed to update schedule run (agent path): {e}")
-        finally:
-            await db2.close()
+                await db2.execute(
+                    update(Schedule)
+                    .where(Schedule.id == schedule_id)
+                    .values(last_run_at=now, next_run_at=_compute_next_run(cron_expression, now, user_timezone))
+                )
+                await db2.commit()
+            except Exception as e:
+                logger.error(f"Failed to update schedule run (agent path): {e}")
 
         label = "completed" if status == "completed" else "failed"
         await _notify_user_schedule_result(user_id, name, label, conv_id)
@@ -268,59 +271,58 @@ async def _execute_schedule(
     now = datetime.now(timezone.utc)
     conv_id = None
 
-    try:
-        # Save the agent run as a conversation so the user can view and continue it
-        from core.db_models import Conversation, Message as DbMessage
-        import json as _json
+    async with get_db() as db:
+        try:
+            # Save the agent run as a conversation so the user can view and continue it
+            from core.db_models import Conversation, Message as DbMessage
+            import json as _json
 
-        conv = Conversation(
-            user_id=user_id,
-            title=f"[Scheduled] {name}",
-            model=None,
-        )
-        db.add(conv)
-        await db.flush()
-        conv_id = conv.id
-
-        # Store full (untruncated) output as the conversation message
-        db.add(DbMessage(
-            conversation_id=conv_id,
-            role="user",
-            content=prompt,
-        ))
-        if full_text:
-            db.add(DbMessage(
-                conversation_id=conv_id,
-                role="assistant",
-                content=full_text,
-            ))
-        elif error:
-            db.add(DbMessage(
-                conversation_id=conv_id,
-                role="assistant",
-                content=f"Scheduled task failed: {error}",
-            ))
-
-        # Update run record
-        await db.execute(
-            update(ScheduleRun)
-            .where(ScheduleRun.id == run_id)
-            .values(
-                status=status, result=result_text, error=error,
-                finished_at=now, conversation_id=conv_id,
+            conv = Conversation(
+                user_id=user_id,
+                title=f"[Scheduled] {name}",
+                model=None,
             )
-        )
-        # Update schedule timestamps
-        await db.execute(
-            update(Schedule)
-            .where(Schedule.id == schedule_id)
-            .values(last_run_at=now, next_run_at=_compute_next_run(cron_expression, now, user_timezone))
-        )
-        await db.commit()
-    except Exception as e:
-        logger.error(f"Failed to update schedule run: {e}")
-    finally:
-        await db.close()
+            db.add(conv)
+            await db.flush()
+            conv_id = conv.id
+
+            # Store full (untruncated) output as the conversation message
+            db.add(DbMessage(
+                conversation_id=conv_id,
+                role="user",
+                content=prompt,
+            ))
+            if full_text:
+                db.add(DbMessage(
+                    conversation_id=conv_id,
+                    role="assistant",
+                    content=full_text,
+                ))
+            elif error:
+                db.add(DbMessage(
+                    conversation_id=conv_id,
+                    role="assistant",
+                    content=f"Scheduled task failed: {error}",
+                ))
+
+            # Update run record
+            await db.execute(
+                update(ScheduleRun)
+                .where(ScheduleRun.id == run_id)
+                .values(
+                    status=status, result=result_text, error=error,
+                    finished_at=now, conversation_id=conv_id,
+                )
+            )
+            # Update schedule timestamps
+            await db.execute(
+                update(Schedule)
+                .where(Schedule.id == schedule_id)
+                .values(last_run_at=now, next_run_at=_compute_next_run(cron_expression, now, user_timezone))
+            )
+            await db.commit()
+        except Exception as e:
+            logger.error(f"Failed to update schedule run: {e}")
 
     # Notify user with a link to the conversation
     label = "completed" if status == "completed" else "failed"
@@ -333,38 +335,36 @@ async def _scheduler_loop() -> None:
     """Main loop: check for due schedules and cron-triggered agents every CHECK_INTERVAL seconds."""
     while True:
         try:
-            db = await get_db()
-            now = datetime.now(timezone.utc)
-            stmt = select(Schedule).where(
-                Schedule.enabled == True,  # noqa: E712
-                Schedule.next_run_at <= now,
-            )
-            result = await db.execute(stmt)
-            due = result.scalars().all()
+            async with get_db() as db:
+                now = datetime.now(timezone.utc)
+                stmt = select(Schedule).where(
+                    Schedule.enabled == True,  # noqa: E712
+                    Schedule.next_run_at <= now,
+                )
+                result = await db.execute(stmt)
+                due = result.scalars().all()
 
-            for sched in due:
-                logger.info(f"Firing scheduled task: {sched.name} (id={sched.id})")
+                for sched in due:
+                    logger.info(f"Firing scheduled task: {sched.name} (id={sched.id})")
 
-                try:
-                    from core.job_queue import enqueue
-                    await enqueue(
-                        "run_scheduled_agent",
-                        schedule_id=sched.id,
-                        user_id=sched.user_id,
-                        name=sched.name,
-                        prompt=sched.prompt,
-                        cron_expression=sched.cron_expression,
-                        user_timezone=sched.user_timezone or "UTC",
-                    )
-                except Exception as e:
-                    logger.error(f"Failed to enqueue scheduled task '{sched.name}': {e}")
-                    continue
+                    try:
+                        from core.job_queue import enqueue
+                        await enqueue(
+                            "run_scheduled_agent",
+                            schedule_id=sched.id,
+                            user_id=sched.user_id,
+                            name=sched.name,
+                            prompt=sched.prompt,
+                            cron_expression=sched.cron_expression,
+                            user_timezone=sched.user_timezone or "UTC",
+                        )
+                    except Exception as e:
+                        logger.error(f"Failed to enqueue scheduled task '{sched.name}': {e}")
+                        continue
 
-                # Advance next_run_at only after successful enqueue
-                sched.next_run_at = _compute_next_run(sched.cron_expression, now, sched.user_timezone)
-                await db.commit()
-
-            await db.close()
+                    # Advance next_run_at only after successful enqueue
+                    sched.next_run_at = _compute_next_run(sched.cron_expression, now, sched.user_timezone)
+                    await db.commit()
         except Exception as e:
             logger.error(f"Scheduler loop error: {e}")
 
@@ -376,8 +376,7 @@ async def start_scheduler() -> None:
     global _scheduler_task
 
     # Initialise next_run_at for any enabled schedules that don't have it
-    db = await get_db()
-    try:
+    async with get_db() as db:
         stmt = select(Schedule).where(
             Schedule.enabled == True,  # noqa: E712
             Schedule.next_run_at == None,  # noqa: E711
@@ -387,8 +386,6 @@ async def start_scheduler() -> None:
             sched.next_run_at = _compute_next_run(sched.cron_expression, user_tz=sched.user_timezone)
 
         await db.commit()
-    finally:
-        await db.close()
 
     _scheduler_task = asyncio.create_task(_scheduler_loop())
     logger.info("Scheduler started (check interval: %ds)", CHECK_INTERVAL)

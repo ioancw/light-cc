@@ -20,8 +20,7 @@ async def create_schedule(
     if not croniter.is_valid(cron_expression):
         raise ValueError(f"Invalid cron expression: {cron_expression}")
 
-    db = await get_db()
-    try:
+    async with get_db() as db:
         existing = await db.execute(
             select(Schedule).where(Schedule.user_id == user_id, Schedule.name == name)
         )
@@ -41,41 +40,30 @@ async def create_schedule(
         await db.commit()
         await db.refresh(sched)
         return sched
-    finally:
-        await db.close()
 
 
 async def list_schedules(user_id: str) -> list[Schedule]:
     """List all schedules for a user."""
-    db = await get_db()
-    try:
+    async with get_db() as db:
         stmt = select(Schedule).where(Schedule.user_id == user_id).order_by(Schedule.created_at.desc())
         result = await db.execute(stmt)
         return list(result.scalars().all())
-    finally:
-        await db.close()
 
 
 async def get_schedule(schedule_id: str, user_id: str) -> Schedule | None:
     """Get a single schedule by ID, scoped to user."""
-    db = await get_db()
-    try:
+    async with get_db() as db:
         stmt = select(Schedule).where(Schedule.id == schedule_id, Schedule.user_id == user_id)
         result = await db.execute(stmt)
         return result.scalar_one_or_none()
-    finally:
-        await db.close()
 
 
 async def get_schedule_by_name(name: str, user_id: str) -> Schedule | None:
     """Get a schedule by name, scoped to user."""
-    db = await get_db()
-    try:
+    async with get_db() as db:
         stmt = select(Schedule).where(Schedule.name == name, Schedule.user_id == user_id).limit(1)
         result = await db.execute(stmt)
         return result.scalar_one_or_none()
-    finally:
-        await db.close()
 
 
 async def resolve_schedule(name_or_id: str, user_id: str) -> Schedule | None:
@@ -97,8 +85,7 @@ async def resolve_schedule(name_or_id: str, user_id: str) -> Schedule | None:
 
     # Try first token as short hex ID prefix (4+ hex chars)
     if first_token and len(first_token) >= 4 and all(c in "0123456789abcdef" for c in first_token.lower()):
-        db = await get_db()
-        try:
+        async with get_db() as db:
             stmt = (
                 select(Schedule)
                 .where(Schedule.user_id == user_id, Schedule.id.startswith(first_token.lower()))
@@ -108,8 +95,6 @@ async def resolve_schedule(name_or_id: str, user_id: str) -> Schedule | None:
             matches = list(result.scalars().all())
             if len(matches) == 1:
                 return matches[0]
-        finally:
-            await db.close()
 
     # Try full string as exact full ID (in case name looks like a hex string)
     if first_token != name_or_id:
@@ -133,8 +118,7 @@ async def resolve_schedule(name_or_id: str, user_id: str) -> Schedule | None:
 
 async def update_schedule(schedule_id: str, user_id: str, **kwargs) -> Schedule | None:
     """Update a schedule. Accepts: name, cron_expression, prompt, enabled."""
-    db = await get_db()
-    try:
+    async with get_db() as db:
         stmt = select(Schedule).where(Schedule.id == schedule_id, Schedule.user_id == user_id)
         result = await db.execute(stmt)
         sched = result.scalar_one_or_none()
@@ -160,14 +144,11 @@ async def update_schedule(schedule_id: str, user_id: str, **kwargs) -> Schedule 
         await db.commit()
         await db.refresh(sched)
         return sched
-    finally:
-        await db.close()
 
 
 async def delete_schedule(schedule_id: str, user_id: str) -> bool:
     """Delete a schedule and its runs."""
-    db = await get_db()
-    try:
+    async with get_db() as db:
         stmt = select(Schedule).where(Schedule.id == schedule_id, Schedule.user_id == user_id)
         result = await db.execute(stmt)
         sched = result.scalar_one_or_none()
@@ -176,14 +157,11 @@ async def delete_schedule(schedule_id: str, user_id: str) -> bool:
         await db.delete(sched)
         await db.commit()
         return True
-    finally:
-        await db.close()
 
 
 async def get_schedule_runs(schedule_id: str, user_id: str, limit: int = 20) -> list[ScheduleRun]:
     """Get recent runs for a schedule."""
-    db = await get_db()
-    try:
+    async with get_db() as db:
         # Verify ownership
         sched_stmt = select(Schedule.id).where(Schedule.id == schedule_id, Schedule.user_id == user_id)
         sched_result = await db.execute(sched_stmt)
@@ -198,8 +176,6 @@ async def get_schedule_runs(schedule_id: str, user_id: str, limit: int = 20) -> 
         )
         result = await db.execute(stmt)
         return list(result.scalars().all())
-    finally:
-        await db.close()
 
 
 async def trigger_schedule_now(schedule_id: str, user_id: str) -> bool:

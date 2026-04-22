@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -20,8 +21,9 @@ from tests.conftest import _build_text_events
 async def runner_db(test_db: AsyncSession, test_user):
     """Patch get_db in agent_crud + agent_runner to return the shared test session."""
 
+    @asynccontextmanager
     async def _get_test_db():
-        return test_db
+        yield test_db
 
     with patch("core.agent_crud.get_db", side_effect=_get_test_db), \
          patch("core.agent_runner.get_db", side_effect=_get_test_db):
@@ -237,8 +239,10 @@ class TestExecuteAgentRun:
             await s.refresh(u)
             user_id = u.id
 
+        @asynccontextmanager
         async def _fresh_db():
-            return factory()
+            async with factory() as s:
+                yield s
 
         with patch("core.agent_crud.get_db", side_effect=_fresh_db), \
              patch("core.agent_runner.get_db", side_effect=_fresh_db):

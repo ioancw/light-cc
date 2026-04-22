@@ -155,6 +155,6 @@ export async function renderChart(el, plotlyJson, opts = {}) {
       modeBarButtonsToRemove: ['lasso2d', 'select2d', 'autoScale2d'],
     });
   } catch (e) {
-    console.error('Plotly render error:', e);
+    if (import.meta.env.DEV) console.error('Plotly render error:', e);
   }
 }

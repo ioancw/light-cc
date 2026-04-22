@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -12,6 +13,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import settings
 from core.db_models import User
+
+logger = logging.getLogger(__name__)
+
+# Decode algorithms are locked to HS256 regardless of settings.jwt_algorithm.
+# Reading the alg from settings and passing it back to jwt.decode opens an
+# alg-confusion path (an attacker-controlled config could downgrade to HS1,
+# or the jwt library could accept `none`). Signing still reads settings.
+_DECODE_ALGS = ["HS256"]
 
 
 def hash_password(password: str) -> str:
@@ -54,7 +63,7 @@ async def revoke_token(token: str) -> bool:
     Returns True if revoked successfully, False if Redis unavailable or token invalid.
     """
     try:
-        payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
+        payload = jwt.decode(token, settings.jwt_secret, algorithms=_DECODE_ALGS)
     except JWTError:
         return False
 
@@ -76,9 +85,17 @@ async def revoke_token(token: str) -> bool:
 
 
 async def is_token_revoked(token: str) -> bool:
-    """Check if a JWT has been revoked. Returns False if Redis unavailable."""
+    """Check if a JWT has been revoked.
+
+    Fails closed: if Redis is *configured* (settings.redis_url is set) but the
+    check cannot complete — pool unavailable, call raises — this returns True.
+    The previous behaviour returned False on error, so a Redis outage silently
+    re-enabled revoked tokens.
+
+    Fails open only when Redis is not configured at all (dev/local mode).
+    """
     try:
-        payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
+        payload = jwt.decode(token, settings.jwt_secret, algorithms=_DECODE_ALGS)
     except JWTError:
         return False
 
@@ -86,8 +103,24 @@ async def is_token_revoked(token: str) -> bool:
     if not jti:
         return False  # tokens without jti can't be revoked
 
-    from core.redis_store import set_check
-    return await set_check(_REVOKED_TOKENS_KEY, jti)
+    from core import redis_store
+
+    if not settings.redis_url:
+        return False
+
+    if not redis_store.is_available():
+        from core.telemetry import record_error
+        logger.warning("Redis configured but unavailable — failing closed on token revocation check")
+        record_error("redis_revocation_unavailable")
+        return True
+
+    try:
+        return bool(await redis_store._pool.sismember(_REVOKED_TOKENS_KEY, jti))
+    except Exception as e:
+        from core.telemetry import record_error
+        logger.warning(f"Redis revocation check failed, failing closed: {e}")
+        record_error("redis_revocation_error")
+        return True
 
 
 def decode_token(token: str) -> dict | None:
@@ -98,7 +131,7 @@ def decode_token(token: str) -> dict | None:
     is_token_revoked() separately in async contexts.
     """
     try:
-        payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
+        payload = jwt.decode(token, settings.jwt_secret, algorithms=_DECODE_ALGS)
         return payload
     except JWTError:
         return None

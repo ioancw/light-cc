@@ -21,6 +21,7 @@ export function connect() {
   ws.onopen = () => {
     appState.connected = true;
     appState.connecting = false;
+    appState.reconnectAt = null;
     reconnectDelay = 1000;
     if (reconnectTimer) {
       clearTimeout(reconnectTimer);
@@ -43,17 +44,22 @@ export function connect() {
     appState.connecting = false;
 
     if (event.code === 4001) {
+      appState.reconnectAt = null;
       clearAuth();
       return;
     }
 
+    appState.reconnectAt = Date.now() + reconnectDelay;
     reconnectTimer = setTimeout(() => {
       reconnectDelay = Math.min(reconnectDelay * 2, 30000);
       connect();
     }, reconnectDelay);
   };
 
-  ws.onerror = () => { /* onclose will fire and handle reconnect */ };
+  ws.onerror = (event) => {
+    // Surface for devtools; onclose fires right after and drives the banner.
+    console.error('[ws] connection error', event);
+  };
 }
 
 export function disconnect() {
@@ -103,6 +109,7 @@ function handleEvent(type, data, cid = null) {
       appState.sessionId = data.session_id;
       if (data.user) appState.user = data.user;
       appState.skills = data.skills || [];
+      appState.agents = data.agents || [];
       appState.suggestions = data.suggestions || [];
       if (data.available_models) {
         appState.availableModels = data.available_models;
@@ -301,6 +308,12 @@ function handleEvent(type, data, cid = null) {
 
     case 'skills_updated':
       appState.skills = data.skills || [];
+      break;
+
+    case 'agents_updated':
+      // Backend ships the refreshed roster; older builds may send `{}`,
+      // in which case we leave the existing list alone rather than wiping it.
+      if (Array.isArray(data.agents)) appState.agents = data.agents;
       break;
 
     case 'skill_activated':

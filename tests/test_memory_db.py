@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import asynccontextmanager
 
 import pytest
 import pytest_asyncio
@@ -25,8 +26,9 @@ async def memory_db(test_db: AsyncSession, test_user):
     """Patch _get_db to return the test database session."""
     from unittest.mock import AsyncMock, patch
 
+    @asynccontextmanager
     async def _get_test_db():
-        return test_db
+        yield test_db
 
     with patch("memory.manager._get_db", side_effect=_get_test_db):
         yield test_db, test_user

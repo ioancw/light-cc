@@ -9,9 +9,19 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import uuid
 from pathlib import Path
 from typing import Any, Awaitable, Callable
+
+# ``@agent-<name> [prompt]`` -- chat surface for direct agent dispatch.
+# Name is kebab-case; an optional ``<plugin>:<name>`` colon namespace is
+# preserved through to ``get_agent_by_name`` (plugin agents store the
+# colon literally in ``AgentDefinition.name``).
+AGENT_MENTION_RE = re.compile(
+    r"^@agent-([a-z0-9][a-z0-9-]*(?::[a-z0-9][a-z0-9-]*)?)(?:\s+(.*))?$",
+    re.DOTALL,
+)
 
 from core import agent, agent_runs
 from core.config import settings
@@ -29,8 +39,28 @@ from core.session import (
     set_current_cid,
     set_current_session,
 )
-from commands.registry import get_command, list_commands
-from handlers.commands import handle_plugin_command, handle_schedule_command
+from handlers.agents_wizard import (
+    handle_wizard_input as agents_wizard_input,
+    is_wizard_active as agents_wizard_active,
+    start_wizard as start_agents_wizard,
+)
+from handlers.skills_wizard import (
+    handle_wizard_input as skills_wizard_input,
+    is_wizard_active as skills_wizard_active,
+    start_wizard as start_skills_wizard,
+)
+from handlers.schedule_wizard import (
+    handle_wizard_input as schedule_wizard_input,
+    is_wizard_active as schedule_wizard_active,
+    start_wizard as start_schedule_wizard,
+)
+from handlers.commands import (
+    handle_agents_command,
+    handle_plugin_command,
+    handle_schedule_command,
+    handle_skills_command,
+    list_agents_for_client,
+)
 from handlers.media import send_chart_if_any, send_images_if_any, send_tables_if_any
 from core.telemetry import async_trace_span, record_error
 from memory.manager import ensure_user_dirs, load_memory, set_current_user
@@ -118,8 +148,7 @@ async def _list_user_agents(user_id: str) -> list[tuple[str, str]]:
         from core.database import get_db
         from core.db_models import AgentDefinition
 
-        db = await get_db()
-        try:
+        async with get_db() as db:
             res = await db.execute(
                 select(AgentDefinition.name, AgentDefinition.description).where(
                     AgentDefinition.user_id == user_id,
@@ -127,8 +156,6 @@ async def _list_user_agents(user_id: str) -> list[tuple[str, str]]:
                 )
             )
             return [(n, d) for n, d in res.all()]
-        finally:
-            await db.close()
     except Exception as e:
         logger.debug(f"_list_user_agents failed for {user_id}: {e}")
         return []
@@ -154,6 +181,46 @@ async def handle_user_message(
     if messages is None:
         messages = []
         conv_session_set(cid, "messages", messages)
+
+    # ── Wizard intercept (agents + skills) ─────────────────────────────
+    # When a wizard is mid-conversation for this session, every reply
+    # belongs to it -- bypass slash routing, skill matching, the model,
+    # and even conversation persistence so the back-and-forth doesn't
+    # bloat chat history. The wizards own their own multi-turn state.
+    if agents_wizard_active(session_id):
+        project_dir = Path(settings.project_dir) if settings.project_dir else Path.cwd()
+        outcome = await agents_wizard_input(
+            session_id, user_id, data["text"], project_dir,
+        )
+        await send_event("text_delta", {"text": outcome.text})
+        if outcome.agents_updated:
+            await send_event("agents_updated", {"agents": await list_agents_for_client(user_id)})
+        await send_event("turn_complete", {})
+        return
+
+    if skills_wizard_active(session_id):
+        project_dir = Path(settings.project_dir) if settings.project_dir else Path.cwd()
+        outcome = await skills_wizard_input(
+            session_id, user_id, data["text"], project_dir,
+        )
+        await send_event("text_delta", {"text": outcome.text})
+        if outcome.skills_updated:
+            # Push the refreshed roster the same way /reload does.
+            refreshed = [
+                {"name": s.name, "description": s.description, "argument_hint": s.argument_hint}
+                for s in list_skills() if s.user_invocable
+            ]
+            await send_event("skills_updated", {"skills": refreshed})
+        await send_event("turn_complete", {})
+        return
+
+    if schedule_wizard_active(session_id):
+        outcome = await schedule_wizard_input(session_id, user_id, data["text"])
+        await send_event("text_delta", {"text": outcome.text})
+        if outcome.schedules_updated:
+            await send_event("schedules_updated", {})
+        await send_event("turn_complete", {})
+        return
 
     # Fire PromptSubmit hooks
     if has_hooks("PromptSubmit"):
@@ -196,7 +263,53 @@ async def handle_user_message(
 
     msg_stripped = data["text"].strip()
     matched_skill = None
-    matched_command = None
+
+    # ── @agent-<name> dispatch ─────────────────────────────────────────
+    # Same surface CC exposes: typing ``@agent-foo Do X`` in chat invokes
+    # the foo agent with prompt ``Do X``. Symmetric with the ``Agent`` tool
+    # the model uses internally -- both end up at ``run_agent_once``.
+    # No cross-category fallback: an unknown @agent- name falls through to
+    # main Claude as literal text rather than escalating to skill/command.
+    mention = AGENT_MENTION_RE.match(msg_stripped)
+    if mention:
+        agent_name = mention.group(1)
+        agent_prompt = (mention.group(2) or "").strip()
+        from core.agent_crud import get_agent_by_name
+        agent_def = await get_agent_by_name(agent_name, user_id)
+        if agent_def and agent_def.enabled:
+            from core.agent_runner import run_agent_once
+            await send_event("skill_activated", {
+                "name": agent_def.name,
+                "description": agent_def.description,
+                "type": "agent",
+            })
+            try:
+                result = await run_agent_once(
+                    agent_def,
+                    agent_prompt or f"Execute your task ({agent_def.name}).",
+                    trigger_type="mention",
+                    parent_session_id=session_id,
+                    persist_conversation=False,
+                )
+                if result.status == "failed":
+                    assistant_text = (
+                        f"Agent `{agent_def.name}` failed: "
+                        f"{result.error or 'unknown error'}"
+                    )
+                else:
+                    assistant_text = result.result_text or (
+                        f"(Agent `{agent_def.name}` returned no output.)"
+                    )
+            except Exception as e:
+                logger.error(f"Agent mention dispatch failed: {e}", exc_info=True)
+                assistant_text = f"Agent `{agent_def.name}` errored: {e}"
+
+            await send_event("text_delta", {"text": assistant_text})
+            messages.append({"role": "assistant", "content": [{"type": "text", "text": assistant_text}]})
+            conv_session_set(cid, "messages", messages)
+            conv_id = await save_conversation(cid)
+            await send_event("turn_complete", {"conversation_id": conv_id})
+            return
 
     if msg_stripped.startswith("/"):
         slash_name = msg_stripped.split()[0][1:]
@@ -207,26 +320,28 @@ async def handle_user_message(
         if slash_name == "reload":
             from skills.registry import reload_skills
             from commands.registry import reload_commands
-            n_skills = reload_skills()
-            n_cmds = reload_commands()
+            reload_skills()
+            n_cmds = reload_commands()  # legacy-command subset
+            n_skills = sum(1 for s in list_skills() if s.kind != "legacy-command")
             # Clear cached project config/rules so they're re-read too
             connection_set(session_id, "project_config", None)
             connection_set(session_id, "project_rules", None)
             await send_event("text_delta", {"text": f"Reloaded {n_skills} skills and {n_cmds} commands."})
-            # Notify frontend of updated skill list
+            # Notify frontend of updated skill list (legacy commands already
+            # included in ``list_skills()`` via the unified registry).
             refreshed = [
                 {"name": s.name, "description": s.description, "argument_hint": s.argument_hint}
                 for s in list_skills() if s.user_invocable
             ] + [
-                {"name": c.name, "description": c.description, "argument_hint": c.argument_hint}
-                for c in list_commands()
-            ] + [
+                {"name": "agents", "description": "List, enable, disable, or show your agents", "argument_hint": "list|show|enable|disable <name>"},
+                {"name": "skills", "description": "List, enable, disable, show, or create skills", "argument_hint": "list|show|enable|disable|create <name>"},
                 {"name": "context", "description": "Show context window usage breakdown", "argument_hint": ""},
                 {"name": "plugin", "description": "Install, list, update, or uninstall plugins", "argument_hint": "install|list|update|uninstall <name-or-url>"},
                 {"name": "schedule", "description": "Create, list, enable, disable, or delete scheduled agent tasks", "argument_hint": "create|list|enable|disable|delete|runs|run"},
                 {"name": "reload", "description": "Reload all skills, commands, and project config from disk", "argument_hint": ""},
             ]
             await send_event("skills_updated", {"skills": refreshed})
+            await send_event("agents_updated", {"agents": await list_agents_for_client(user_id)})
             await send_event("turn_complete", {})
             return
 
@@ -257,7 +372,15 @@ async def handle_user_message(
 
         # Built-in: /plugin
         if slash_name == "plugin":
-            result = await handle_plugin_command(args)
+            # Re-check admin against DB rather than trusting connection state.
+            user_is_admin = False
+            if user_id and user_id != "default":
+                from core.auth import get_user_by_id
+                from core.database import get_db
+                async with get_db() as db:
+                    user = await get_user_by_id(db, user_id)
+                    user_is_admin = bool(user and user.is_admin)
+            result = await handle_plugin_command(args, user_is_admin=user_is_admin)
             await send_event("text_delta", {"text": result})
             sub = args.strip().split()[0].lower() if args.strip() else ""
             if sub in ("install", "uninstall", "remove", "update"):
@@ -265,37 +388,119 @@ async def handle_user_message(
                     {"name": s.name, "description": s.description, "argument_hint": s.argument_hint}
                     for s in list_skills() if s.user_invocable
                 ] + [
-                    {"name": c.name, "description": c.description, "argument_hint": c.argument_hint}
-                    for c in list_commands()
-                ] + [
+                    {"name": "agents", "description": "List, enable, disable, or show your agents", "argument_hint": "list|show|enable|disable <name>"},
                     {"name": "context", "description": "Show context window usage breakdown", "argument_hint": ""},
                     {"name": "plugin", "description": "Install, list, update, or uninstall plugins", "argument_hint": "install|list|update|uninstall <name-or-url>"},
                 ]
                 await send_event("skills_updated", {"skills": refreshed})
+                await send_event("agents_updated", {"agents": await list_agents_for_client(user_id)})
             await send_event("turn_complete", {})
             return
 
         # Built-in: /schedule
+        # Bare ``/schedule`` opens the conversational wizard; explicit
+        # subcommands (``create``/``list``/``run``/...) still route through
+        # ``handle_schedule_command`` so power users keep the one-liner.
         if slash_name == "schedule":
+            if not args.strip():
+                first_prompt = start_schedule_wizard(session_id, user_id)
+                await send_event("text_delta", {"text": first_prompt})
+                await send_event("turn_complete", {})
+                return
             result = await handle_schedule_command(args, user_id)
             await send_event("text_delta", {"text": result})
             await send_event("turn_complete", {})
             return
 
-        # 1. Try skill first
+        # Built-in: /agents -- list, enable, disable, show, create.
+        # ``create`` is intercepted here (not in handle_agents_command)
+        # because the wizard needs the live session_id to persist its
+        # state across turns. Mutating subcommands (enable/disable) bump
+        # ``agents_updated`` so the frontend roster + ``@agent-`` picker
+        # pick up the new state.
+        if slash_name == "agents":
+            sub = args.strip().split(None, 1)
+            sub_cmd = sub[0].lower() if sub else ""
+            if sub_cmd == "create":
+                name_hint = sub[1].strip() if len(sub) > 1 else ""
+                first_prompt = start_agents_wizard(session_id, user_id, name_hint)
+                await send_event("text_delta", {"text": first_prompt})
+                await send_event("turn_complete", {})
+                return
+
+            result = await handle_agents_command(args, user_id)
+            await send_event("text_delta", {"text": result})
+            if sub_cmd in ("enable", "disable"):
+                await send_event("agents_updated", {"agents": await list_agents_for_client(user_id)})
+            await send_event("turn_complete", {})
+            return
+
+        # Built-in: /skills -- list, show, enable, disable, create.
+        # ``create`` is intercepted here (needs session_id for the wizard).
+        # enable/disable mutate on-disk frontmatter and re-run reload, so
+        # we push a refreshed ``skills_updated`` payload to keep the UI
+        # picker in sync.
+        if slash_name == "skills":
+            sub = args.strip().split(None, 1)
+            sub_cmd = sub[0].lower() if sub else ""
+            if sub_cmd == "create":
+                name_hint = sub[1].strip() if len(sub) > 1 else ""
+                first_prompt = start_skills_wizard(session_id, user_id, name_hint)
+                await send_event("text_delta", {"text": first_prompt})
+                await send_event("turn_complete", {})
+                return
+
+            result = await handle_skills_command(args, user_id)
+            await send_event("text_delta", {"text": result})
+            if sub_cmd in ("enable", "disable"):
+                refreshed = [
+                    {"name": s.name, "description": s.description, "argument_hint": s.argument_hint}
+                    for s in list_skills() if s.user_invocable
+                ]
+                await send_event("skills_updated", {"skills": refreshed})
+            await send_event("turn_complete", {})
+            return
+
+        # Unified resolver: real SKILL.md skills and legacy commands/*.md
+        # files both live in the skills registry now (commands are wrapped as
+        # ``SkillDef(kind="legacy-command")``). The `kind` field only affects
+        # UI labelling -- dispatch is identical.
         matched_skill = match_skill_by_name(slash_name)
         if matched_skill:
             active_prompt = matched_skill.resolve_arguments(args, session_id=session_id)
-        else:
-            # 2. Check commands
-            matched_command = get_command(slash_name)
-            if matched_command:
-                active_prompt = matched_command.resolve_arguments(args)
     else:
         # 3. Intent-based skill matching (natural language)
         matched_skill = match_skill_by_intent(data["text"])
         if matched_skill:
             active_prompt = matched_skill.prompt
+
+    # ── Agent intent router ────────────────────────────────────────────
+    # Belt-and-braces nudge: when no skill matched and the message isn't
+    # an explicit slash, score the user's enabled agents against the
+    # message. A strong match becomes a per-turn hint at the top of the
+    # system prompt -- the model still chooses whether to delegate. We
+    # never auto-dispatch from the matcher because the user retains the
+    # right to free-form chat with main Claude even on adjacent intents.
+    routing_hint: str | None = None
+    if matched_skill is None and not msg_stripped.startswith("/") and not mention:
+        try:
+            from core.agent_crud import match_agent_by_intent
+            matched_agent = await match_agent_by_intent(data["text"], user_id)
+        except Exception as e:
+            logger.debug(f"match_agent_by_intent failed: {e}")
+            matched_agent = None
+        if matched_agent:
+            routing_hint = (
+                f"This user message strongly matches the configured agent "
+                f"`{matched_agent.name}` ({matched_agent.description}). "
+                f"You MUST delegate by calling "
+                f"`Agent(agent_type=\"{matched_agent.name}\", "
+                f"prompt=\"<full original user message and any context>\")` "
+                f"rather than handling the task inline. Do not paraphrase "
+                f"or summarize the task before handing off. Only handle "
+                f"inline if you are CERTAIN this agent does not fit the "
+                f"request."
+            )
 
     # Apply tool filter from matched skill
     if matched_skill and matched_skill.tools:
@@ -304,18 +509,13 @@ async def handle_user_message(
             tool_schemas = filtered
             set_active_tool_filter(matched_skill.tools)
 
-    # Notify UI
+    # Notify UI -- the legacy-command vs skill distinction is preserved on
+    # the wire so the frontend can label invocations correctly.
     if matched_skill:
         await send_event("skill_activated", {
             "name": matched_skill.name,
             "description": matched_skill.description,
-            "type": "skill",
-        })
-    elif matched_command:
-        await send_event("skill_activated", {
-            "name": matched_command.name,
-            "description": matched_command.description,
-            "type": "command",
+            "type": "command" if matched_skill.kind == "legacy-command" else "skill",
         })
 
     # Handle skill context=fork: run in isolated subagent
@@ -353,6 +553,7 @@ async def handle_user_message(
         rules_text or None,
         outputs_dir=str(user_outputs_dir),
         available_agents=available_agents,
+        routing_hint=routing_hint,
     )
 
     # ── Agent callbacks ──

@@ -1,6 +1,6 @@
 <script>
   import { appState, showToast } from '../state.svelte.js';
-  import { listFiles, readFile, uploadFile } from '../api.js';
+  import { listFiles, readFile, uploadFile, getDownloadURL } from '../api.js';
   import { formatFileSize } from '../lib/utils.js';
 
   let open = $state(false);
@@ -68,13 +68,18 @@
     }
   }
 
-  function downloadFile(path, name) {
-    const a = document.createElement('a');
-    a.href = `/api/files/download?path=${encodeURIComponent(path)}&token=${encodeURIComponent(appState.authToken)}`;
-    a.download = name || path.split('/').pop() || 'file';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+  async function downloadFile(path, name) {
+    try {
+      const { url } = await getDownloadURL(path);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = name || path.split('/').pop() || 'file';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    } catch (e) {
+      showToast(`Download failed: ${e.message}`, 'error');
+    }
   }
 
   async function handleUpload() {

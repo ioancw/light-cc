@@ -13,6 +13,8 @@ export const appState = $state({
   connected: false,
   connecting: false,
   sessionId: null,
+  // ms epoch of the next reconnect attempt (null when connected or giving up).
+  reconnectAt: null,
 
   // Conversations
   conversations: {},
@@ -27,6 +29,9 @@ export const appState = $state({
 
   // Skills (for slash command autocomplete)
   skills: [],
+
+  // Agents (for `@agent-` autocomplete picker)
+  agents: [],
 
   // Suggestion chips for new-chat empty state
   suggestions: [],

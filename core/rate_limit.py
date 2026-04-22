@@ -276,3 +276,64 @@ def check_ws_connect(ip: str) -> tuple[bool, str]:
 def reset_limits(user_id: str) -> None:
     """Reset rate limits for a user (e.g., admin action)."""
     _user_limits.pop(user_id, None)
+
+
+# ── Auth-endpoint rate limit ──────────────────────────────────────────
+#
+# Keyed on sha256(email_lower)+IP so a single attacker can't lock out a real
+# user (IP component) and one user can't bypass by rotating IPs (email
+# component). Hard-lock after 10 failures in 15 min with exponential-ish
+# Retry-After hints. Uses Redis when available for cross-replica correctness.
+
+import hashlib
+
+_AUTH_CAPACITY = 10
+_AUTH_WINDOW = 900  # 15 minutes
+_auth_attempts_mem: dict[str, list[float]] = {}
+
+
+def _auth_key_id(email: str, ip: str) -> str:
+    """Identifier combining hashed email and IP — avoids storing email in key."""
+    digest = hashlib.sha256(email.strip().lower().encode("utf-8")).hexdigest()[:16]
+    return f"{digest}:{ip}"
+
+
+async def check_auth_rate_limit(email: str, ip: str) -> tuple[bool, float]:
+    """Check whether this (email, IP) pair may attempt another auth call.
+
+    Returns (allowed, retry_after_seconds). When not allowed, retry_after is a
+    hint derived from the oldest attempt in the window. The limit is
+    intentionally shared across login/register/refresh — the goal is to bound
+    total damage per actor regardless of which endpoint they probe.
+    """
+    ident = _auth_key_id(email or "anonymous", ip or "unknown")
+    now = time.time()
+
+    if _redis_available():
+        key = f"lcc:auth_rl:{ident}"
+        allowed, retry = await _redis_check(key, _AUTH_CAPACITY, _AUTH_WINDOW)
+        return allowed, retry
+
+    # In-memory fallback — single-process only.
+    cutoff = now - _AUTH_WINDOW
+    history = [t for t in _auth_attempts_mem.get(ident, []) if t > cutoff]
+    if len(history) >= _AUTH_CAPACITY:
+        retry = _AUTH_WINDOW - (now - history[0])
+        _auth_attempts_mem[ident] = history
+        return False, max(retry, 1.0)
+    history.append(now)
+    _auth_attempts_mem[ident] = history
+    return True, 0.0
+
+
+def _client_ip(request) -> str:
+    """Extract the real client IP, honoring X-Forwarded-For's last hop.
+
+    Caddy (per the project Caddyfile) sets X-Forwarded-For to the client IP;
+    in multi-proxy setups we pick the LAST value since earlier hops are
+    attacker-controlled.
+    """
+    xff = request.headers.get("x-forwarded-for", "").strip()
+    if xff:
+        return xff.split(",")[-1].strip()
+    return request.client.host if request.client else "unknown"

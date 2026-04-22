@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from unittest.mock import patch
 
 import pytest
@@ -21,8 +22,9 @@ from routes.memory import router as memory_router
 async def api_client(test_db: AsyncSession, test_user):
     """FastAPI app wired with the memory router and test DB session."""
 
+    @asynccontextmanager
     async def _get_test_db():
-        return test_db
+        yield test_db
 
     app = FastAPI()
     app.include_router(memory_router)

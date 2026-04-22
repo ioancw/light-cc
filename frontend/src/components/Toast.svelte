@@ -26,6 +26,9 @@
         class:success={toast.type === 'success'}
         class:exiting={exiting.has(toast.id)}
         onclick={() => dismiss(toast.id)}
+        role={toast.type === 'error' ? 'alert' : 'status'}
+        aria-live={toast.type === 'error' ? 'assertive' : 'polite'}
+        aria-label="{toast.message} (click to dismiss)"
       >
         {toast.message}
       </button>

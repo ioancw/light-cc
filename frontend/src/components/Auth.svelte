@@ -1,5 +1,6 @@
 <script>
   import { login, register } from '../api.js';
+  import { BRAND_NAME } from '../brand.js';
 
   let activeTab = $state('login');
   let loading = $state(false);
@@ -42,7 +43,7 @@
 <div class="auth-page">
   <div class="auth-card">
     <div class="auth-logo">
-      <h1>&#9670; Wiggy</h1>
+      <h1>&#9670; {BRAND_NAME}</h1>
       <p>AI-powered workspace</p>
     </div>
 
@@ -69,7 +70,7 @@
           <label for="login-password">Password</label>
           <input type="password" id="login-password" bind:value={loginPassword} required autocomplete="current-password">
         </div>
-        <button type="submit" class="submit-btn" class:loading disabled={loading}>Sign In</button>
+        <button type="submit" class="submit-btn" class:loading disabled={loading} aria-busy={loading}>Sign In</button>
       </form>
     {:else}
       <form onsubmit={handleRegister}>
@@ -85,7 +86,7 @@
           <label for="reg-password">Password</label>
           <input type="password" id="reg-password" bind:value={regPassword} required minlength="6" autocomplete="new-password">
         </div>
-        <button type="submit" class="submit-btn" class:loading disabled={loading}>Create Account</button>
+        <button type="submit" class="submit-btn" class:loading disabled={loading} aria-busy={loading}>Create Account</button>
       </form>
     {/if}
 

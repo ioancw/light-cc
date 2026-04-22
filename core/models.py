@@ -58,6 +58,13 @@ class SkillDef(BaseModel):
     skill_dir: str = ""  # Directory containing this skill's SKILL.md
     prompt: str = ""  # The markdown body -- injected into system prompt
 
+    # Origin tag. ``"skill"`` is a real SKILL.md/skills directory entry;
+    # ``"legacy-command"`` is a ``commands/*.md`` file loaded into the unified
+    # registry (matches CC's semantic merge in 2.1+: same `/foo` surface,
+    # two file locations). The plain user surface treats both the same -- this
+    # field exists for back-compat reporting (e.g. ``list_commands()``).
+    kind: str = "skill"
+
     def resolve_arguments(self, args: str, session_id: str = "") -> str:
         """Substitute variables in the prompt.
 

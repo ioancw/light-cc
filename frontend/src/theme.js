@@ -29,4 +29,15 @@ export function restoreTheme() {
     const preferLight = window.matchMedia('(prefers-color-scheme: light)').matches;
     setTheme(preferLight ? 'light' : 'midnight');
   }
+
+  // Live-follow OS theme changes when the user hasn't pinned a choice.
+  const mq = window.matchMedia('(prefers-color-scheme: light)');
+  const onOSChange = (e) => {
+    if (localStorage.getItem('lcc_theme')) return;
+    setTheme(e.matches ? 'light' : 'midnight');
+    // setTheme writes to localStorage, so clear it again to keep following OS.
+    localStorage.removeItem('lcc_theme');
+  };
+  if (mq.addEventListener) mq.addEventListener('change', onOSChange);
+  else if (mq.addListener) mq.addListener(onOSChange);
 }

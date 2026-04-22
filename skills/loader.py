@@ -149,6 +149,146 @@ def parse_skill_file(path: Path) -> SkillDef | None:
     )
 
 
+# Frontmatter key emit order. Mirrors ``_AGENT_FRONTMATTER_KEY_ORDER``
+# in ``core/agent_loader.py`` -- stable ordering keeps wizard re-writes
+# (e.g. enable/disable) producing minimal diffs.
+_SKILL_FRONTMATTER_KEY_ORDER = (
+    "name",
+    "description",
+    "argument-hint",
+    "allowed-tools",
+    "tools",
+    "shell",
+    "context",
+    "agent",
+    "disable-model-invocation",
+    "user-invocable",
+    "model",
+    "effort",
+    "paths",
+    "license",
+    "compatibility",
+    "metadata",
+)
+
+
+def write_skill_def(
+    def_: SkillDef,
+    skills_dir: str | Path,
+    *,
+    overwrite: bool = False,
+    extra_frontmatter: dict[str, Any] | None = None,
+) -> Path:
+    """Serialize a SkillDef to ``skills/<name>/SKILL.md``.
+
+    Mirrors ``write_agent_def`` in ``core/agent_loader.py``: refuses to
+    overwrite by default, persists CC pass-through fields verbatim, and
+    drops defaults so files stay clean.
+    """
+    root = Path(skills_dir)
+    target_dir = root / def_.name
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = target_dir / "SKILL.md"
+
+    if target.exists() and not overwrite:
+        raise FileExistsError(
+            f"SKILL.md already exists at {target}. Pass overwrite=True to replace."
+        )
+
+    raw: dict[str, Any] = {
+        "name": def_.name,
+        "description": def_.description,
+    }
+    if def_.argument_hint:
+        raw["argument-hint"] = def_.argument_hint
+    if def_.tools:
+        # Use the spec's space-delimited form when there are no commas/parens
+        # in any element; otherwise fall back to a YAML list for safety.
+        raw["allowed-tools"] = list(def_.tools)
+    # Defaults: only emit when they diverge from SkillDef defaults
+    if def_.disable_model_invocation:
+        raw["disable-model-invocation"] = True
+    if def_.user_invocable is False:
+        raw["user-invocable"] = False
+    if def_.model:
+        raw["model"] = def_.model
+    if def_.effort:
+        raw["effort"] = def_.effort
+    if def_.context:
+        raw["context"] = def_.context
+    if def_.agent:
+        raw["agent"] = def_.agent
+    if def_.paths:
+        raw["paths"] = list(def_.paths)
+    if def_.license:
+        raw["license"] = def_.license
+    if def_.compatibility:
+        raw["compatibility"] = def_.compatibility
+    if def_.metadata:
+        raw["metadata"] = dict(def_.metadata)
+
+    if extra_frontmatter:
+        for k, v in extra_frontmatter.items():
+            if v in (None, "", [], {}):
+                continue  # don't emit empty pass-through fields
+            raw[k] = v
+
+    ordered: dict[str, Any] = {}
+    for k in _SKILL_FRONTMATTER_KEY_ORDER:
+        if k in raw:
+            ordered[k] = raw.pop(k)
+    ordered.update(sorted(raw.items()))
+
+    fm = yaml.safe_dump(
+        ordered, sort_keys=False, default_flow_style=False, allow_unicode=True
+    ).rstrip()
+    body = (def_.prompt or "").rstrip()
+    target.write_text(f"---\n{fm}\n---\n\n{body}\n", encoding="utf-8")
+    return target
+
+
+def set_skill_enabled(skill_path: Path, enabled: bool) -> None:
+    """Flip a skill's user/model invocation flags by editing the frontmatter.
+
+    "Disabled" means both ``user-invocable: false`` and
+    ``disable-model-invocation: true`` so the skill disappears from the
+    ``/`` autocomplete AND won't be auto-invoked. Re-enabling restores
+    the canonical defaults (visible, model-invocable). Other frontmatter
+    fields are preserved untouched.
+    """
+    text = skill_path.read_text(encoding="utf-8")
+    match = _FRONTMATTER_RE.match(text)
+    if not match:
+        # No frontmatter -- synthesise a minimal one so the toggle takes
+        # effect on next reload.
+        body = text.strip()
+        meta: dict[str, Any] = {"name": skill_path.parent.name}
+    else:
+        try:
+            meta = yaml.safe_load(match.group(1)) or {}
+        except yaml.YAMLError:
+            raise ValueError(f"Invalid YAML in {skill_path}")
+        body = text[match.end():].strip()
+
+    if enabled:
+        meta.pop("disable-model-invocation", None)
+        meta.pop("user-invocable", None)
+    else:
+        meta["disable-model-invocation"] = True
+        meta["user-invocable"] = False
+
+    ordered: dict[str, Any] = {}
+    for k in _SKILL_FRONTMATTER_KEY_ORDER:
+        if k in meta:
+            ordered[k] = meta.pop(k)
+    ordered.update(sorted(meta.items()))
+
+    fm = yaml.safe_dump(
+        ordered, sort_keys=False, default_flow_style=False, allow_unicode=True
+    ).rstrip()
+    skill_path.write_text(f"---\n{fm}\n---\n\n{body}\n", encoding="utf-8")
+
+
 def discover_skills(skills_dir: str | Path) -> list[SkillDef]:
     """Auto-discover skills from a directory.
 

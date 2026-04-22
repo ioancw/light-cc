@@ -3,6 +3,7 @@
   import { formatTime, escapeHtml, modelLabel } from '../lib/utils.js';
   import { send } from '../ws.js';
   import { currentConversation } from '../state.svelte.js';
+  import { BRAND_NAME } from '../brand.js';
   import ToolCall from './ToolCall.svelte';
   import ToolGroup from './ToolGroup.svelte';
   import Chart from './renderers/Chart.svelte';
@@ -94,7 +95,7 @@
   <div class="msg-body" bind:this={bodyEl}>
     <div class="msg-header">
       <span class="msg-role">
-        {msg.role === 'user' ? 'You' : 'Wiggy'}
+        {msg.role === 'user' ? 'You' : BRAND_NAME}
       </span>
       {#if msg.model && msg.role === 'assistant'}
         <span class="msg-model">{modelLabel(msg.model)}</span>
@@ -247,6 +248,9 @@
     transition: opacity 0.15s;
   }
   .msg-row:hover .msg-actions { opacity: 1; }
+  @media (hover: none) {
+    .msg-actions { opacity: 1; }
+  }
 
   .msg-action-btn {
     background: transparent;

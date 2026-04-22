@@ -5,9 +5,54 @@
 
   let { open = $bindable(false) } = $props();
 
+  let panelEl = $state(null);
+  let previouslyFocused = null;
+
   function close() {
     open = false;
   }
+
+  function focusableIn(root) {
+    if (!root) return [];
+    return Array.from(root.querySelectorAll(
+      'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    ));
+  }
+
+  function onKeydown(e) {
+    if (!open) return;
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      close();
+      return;
+    }
+    if (e.key !== 'Tab' || !panelEl) return;
+    const items = focusableIn(panelEl);
+    if (items.length === 0) return;
+    const first = items[0];
+    const last = items[items.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  }
+
+  $effect(() => {
+    if (open) {
+      previouslyFocused = document.activeElement;
+      // Focus the first interactive element once the panel mounts.
+      requestAnimationFrame(() => {
+        const items = focusableIn(panelEl);
+        if (items[0]) items[0].focus();
+      });
+    } else if (previouslyFocused && typeof previouslyFocused.focus === 'function') {
+      previouslyFocused.focus();
+      previouslyFocused = null;
+    }
+  });
 
   const shortcuts = [
     { keys: 'Ctrl+B', action: 'Toggle sidebar' },
@@ -19,9 +64,11 @@
   ];
 </script>
 
+<svelte:window onkeydown={onKeydown} />
+
 {#if open}
   <div class="settings-overlay" onclick={close} role="presentation"></div>
-  <div class="settings-panel" role="dialog" aria-modal="true" aria-label="Settings">
+  <div class="settings-panel" role="dialog" aria-modal="true" aria-label="Settings" bind:this={panelEl}>
     <div class="settings-header">
       <span class="settings-title">Settings</span>
       <button class="settings-close" onclick={close} aria-label="Close settings">&times;</button>

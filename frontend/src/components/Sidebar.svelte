@@ -4,6 +4,7 @@
   import { send } from '../ws.js';
   import { debounce } from '../lib/utils.js';
   import { showToast } from '../state.svelte.js';
+  import { BRAND_NAME } from '../brand.js';
 
   function closeSidebarOnMobile() {
     if (viewport.isMobile) {
@@ -141,7 +142,7 @@
       return;
     }
     const md = conv.messages.map(m =>
-      `## ${m.role === 'user' ? 'You' : 'Wiggy'}\n\n${m.content}`
+      `## ${m.role === 'user' ? 'You' : BRAND_NAME}\n\n${m.content}`
     ).join('\n\n---\n\n');
     const blob = new Blob([md], { type: 'text/markdown' });
     const a = document.createElement('a');
@@ -274,7 +275,7 @@
 >
   <div class="sidebar-header">
     <span class="logo-chip" aria-hidden="true">/</span>
-    <span class="logo-name">Wiggy</span>
+    <span class="logo-name">{BRAND_NAME}</span>
     <button class="sidebar-close-btn" onclick={toggleCollapse} title="Hide sidebar">&#9664;</button>
   </div>
 
@@ -728,6 +729,9 @@
     transition: opacity 0.15s, color 0.15s;
   }
   .chat-item:hover .chat-item-delete { opacity: 1; }
+  @media (hover: none) {
+    .chat-item-delete { opacity: 1; }
+  }
   .chat-item-delete:hover { color: var(--red); }
 
   .chat-item.scheduled { color: var(--muted); }

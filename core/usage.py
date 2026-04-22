@@ -38,31 +38,28 @@ async def record_usage(
         return
 
     cost = estimate_cost(model, input_tokens, output_tokens)
-    db = await get_db()
-    try:
-        event = UsageEvent(
-            user_id=user_id,
-            conversation_id=conversation_id,
-            model=model,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            cost_usd=cost,
-        )
-        db.add(event)
-        await db.commit()
-    except Exception as e:
-        logger.error(f"Failed to record usage: {e}")
-        await db.rollback()
-    finally:
-        await db.close()
+    async with get_db() as db:
+        try:
+            event = UsageEvent(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                model=model,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cost_usd=cost,
+            )
+            db.add(event)
+            await db.commit()
+        except Exception as e:
+            logger.error(f"Failed to record usage: {e}")
+            await db.rollback()
 
 
 async def get_user_usage_summary(user_id: str) -> dict:
     """Get usage summary for a user."""
     from sqlalchemy import func, select
 
-    db = await get_db()
-    try:
+    async with get_db() as db:
         result = await db.execute(
             select(
                 func.sum(UsageEvent.input_tokens).label("total_input"),
@@ -78,16 +75,13 @@ async def get_user_usage_summary(user_id: str) -> dict:
             "total_cost_usd": round(row.total_cost or 0.0, 6),
             "total_requests": row.total_requests or 0,
         }
-    finally:
-        await db.close()
 
 
 async def get_user_usage_by_model(user_id: str) -> list[dict]:
     """Get usage breakdown by model for a user."""
     from sqlalchemy import func, select
 
-    db = await get_db()
-    try:
+    async with get_db() as db:
         result = await db.execute(
             select(
                 UsageEvent.model,
@@ -111,5 +105,3 @@ async def get_user_usage_by_model(user_id: str) -> list[dict]:
             }
             for r in rows
         ]
-    finally:
-        await db.close()

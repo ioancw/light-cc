@@ -1,7 +1,10 @@
 """Sandboxed subprocess execution — sanitized environment for tool commands.
 
-When running inside a container on Linux, bash commands are prefixed with
-``unshare --net`` for network isolation. Scheduled tasks use a tighter timeout.
+When running inside a container on Linux, tenant commands are wrapped with
+``unshare -n /bin/sh -c <cmd>`` so the network namespace covers the entire
+command string (including anything chained with ``;`` or ``&&``), and ulimit
+caps for memory, CPU, and fds are applied inside the same shell invocation.
+Scheduled tasks use a tighter timeout.
 """
 
 from __future__ import annotations
@@ -9,6 +12,7 @@ from __future__ import annotations
 import logging
 import os
 import platform
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -52,6 +56,16 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 # Scheduled tasks use a tighter timeout than interactive commands
 SCHEDULED_TASK_TIMEOUT = 60
+
+# ulimit caps applied to every tenant subprocess on Linux+container.
+# -v: 1 GiB virtual-memory cap (value in KiB)
+# -t: 120 s CPU-time cap (belt-and-suspenders with the subprocess timeout)
+# -n: 256 open file-descriptor cap
+_ULIMIT_PREAMBLE = (
+    "ulimit -v 1048576 2>/dev/null; "
+    "ulimit -t 120 2>/dev/null; "
+    "ulimit -n 256 2>/dev/null; "
+)
 
 
 def is_containerized() -> bool:
@@ -139,6 +153,25 @@ def _get_user_output_dir() -> str:
     return str(_PROJECT_ROOT / "data" / "outputs")
 
 
+def _sandbox_argv(command_str: str) -> list[str]:
+    """Build the argv for a tenant command so subprocess.run can exec it with shell=False.
+
+    Linux + container: ``unshare -n /bin/sh -c "<ulimit preamble>; <command>"``. The
+    whole command runs inside the network-isolated shell, so chained operators
+    (`;`, `&&`, `$(...)`) can't escape the namespace — which was the bypass in the
+    previous ``unshare --net -- {cmd}`` + ``shell=True`` path.
+
+    Other Linux: same /bin/sh wrapping, minus unshare (dev convenience).
+    Windows: ``cmd /c`` without sandbox — dev only, never hit in prod.
+    """
+    if platform.system() == "Windows":
+        return ["cmd", "/c", command_str]
+    wrapped = _ULIMIT_PREAMBLE + command_str
+    if platform.system() == "Linux" and is_containerized():
+        return ["unshare", "-n", "/bin/sh", "-c", wrapped]
+    return ["/bin/sh", "-c", wrapped]
+
+
 def run_shell_command(
     command: str,
     *,
@@ -150,17 +183,12 @@ def run_shell_command(
     """
     env = _build_safe_env(output_dir=_get_user_output_dir())
     cwd = _get_user_cwd()
-
-    # Network isolation: when running inside a container on Linux, prefix
-    # the command with unshare --net to prevent network access from tool calls.
-    actual_command = command
-    if platform.system() == "Linux" and is_containerized():
-        actual_command = f"unshare --net -- {command}"
+    argv = _sandbox_argv(command)
 
     try:
         result = subprocess.run(
-            actual_command,
-            shell=True,
+            argv,
+            shell=False,
             capture_output=True,
             env=env,
             cwd=cwd,
@@ -189,9 +217,16 @@ def run_python_script(
     env = _build_safe_env(output_dir=output_dir)
     cwd = _get_user_cwd()
 
+    # Route through the same sandbox wrapper so the script inherits network
+    # isolation + ulimit caps on Linux+container. `exec` avoids a lingering
+    # /bin/sh process.
+    cmd_str = f"exec {shlex.quote(python_path)} {shlex.quote(script_path)}"
+    argv = _sandbox_argv(cmd_str)
+
     try:
         result = subprocess.run(
-            [python_path, script_path],
+            argv,
+            shell=False,
             capture_output=True,
             env=env,
             cwd=cwd,

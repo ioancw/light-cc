@@ -42,8 +42,7 @@ async def create_agent(
     """Create a new agent definition. Raises ValueError for invalid input or duplicate name."""
     _validate_definition(memory_scope)
 
-    db = await get_db()
-    try:
+    async with get_db() as db:
         agent = AgentDefinition(
             user_id=user_id,
             name=name,
@@ -67,53 +66,90 @@ async def create_agent(
             raise ValueError(f"An agent named '{name}' already exists.")
         await db.refresh(agent)
         return agent
-    finally:
-        await db.close()
 
 
 async def list_agents(user_id: str) -> list[AgentDefinition]:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         stmt = select(AgentDefinition).where(AgentDefinition.user_id == user_id).order_by(AgentDefinition.created_at.desc())
         result = await db.execute(stmt)
         return list(result.scalars().all())
-    finally:
-        await db.close()
 
 
 async def get_agent(agent_id: str, user_id: str) -> AgentDefinition | None:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         stmt = select(AgentDefinition).where(
             AgentDefinition.id == agent_id,
             AgentDefinition.user_id == user_id,
         )
         result = await db.execute(stmt)
         return result.scalar_one_or_none()
-    finally:
-        await db.close()
 
 
 async def get_agent_by_name(name: str, user_id: str) -> AgentDefinition | None:
     """Look up an agent by name, scoped to a user."""
-    db = await get_db()
-    try:
+    async with get_db() as db:
         stmt = select(AgentDefinition).where(
             AgentDefinition.name == name,
             AgentDefinition.user_id == user_id,
         )
         result = await db.execute(stmt)
         return result.scalar_one_or_none()
-    finally:
-        await db.close()
+
+
+async def match_agent_by_intent(
+    user_message: str,
+    user_id: str,
+    *,
+    threshold: int = 2,
+) -> AgentDefinition | None:
+    """Score this user's enabled agents against the message; return the best
+    match if its score crosses ``threshold``.
+
+    Mirrors ``skills.registry.match_skill_by_intent`` so skill and agent
+    intent routing behave consistently. Score per agent:
+      - +2 for each name word found in the message
+      - +1 for each description word (>3 chars) found in the message
+
+    The match is a *hint* for the chat handler to nudge the model toward
+    delegation; it never auto-dispatches.
+    """
+    if not user_id or user_id == "default":
+        return None
+
+    msg_lower = user_message.strip().lower()
+    if not msg_lower:
+        return None
+
+    async with get_db() as db:
+        stmt = select(AgentDefinition).where(
+            AgentDefinition.user_id == user_id,
+            AgentDefinition.enabled.is_(True),
+        )
+        result = await db.execute(stmt)
+        agents = list(result.scalars().all())
+
+    best: AgentDefinition | None = None
+    best_score = 0
+    for a in agents:
+        score = 0
+        for word in a.name.replace("-", " ").split():
+            if word.lower() in msg_lower:
+                score += 2
+        for word in (a.description or "").lower().split():
+            if len(word) > 3 and word in msg_lower:
+                score += 1
+        if score > best_score:
+            best_score = score
+            best = a
+
+    return best if best_score >= threshold else None
 
 
 async def update_agent(agent_id: str, user_id: str, **kwargs) -> AgentDefinition | None:
     """Update an agent definition. Fields: name, description, model, system_prompt,
     tools, max_turns, timeout_seconds, memory_scope, permissions, enabled.
     """
-    db = await get_db()
-    try:
+    async with get_db() as db:
         stmt = select(AgentDefinition).where(
             AgentDefinition.id == agent_id,
             AgentDefinition.user_id == user_id,
@@ -138,13 +174,10 @@ async def update_agent(agent_id: str, user_id: str, **kwargs) -> AgentDefinition
         await db.commit()
         await db.refresh(agent)
         return agent
-    finally:
-        await db.close()
 
 
 async def delete_agent(agent_id: str, user_id: str) -> bool:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         stmt = select(AgentDefinition).where(
             AgentDefinition.id == agent_id,
             AgentDefinition.user_id == user_id,
@@ -156,13 +189,10 @@ async def delete_agent(agent_id: str, user_id: str) -> bool:
         await db.delete(agent)
         await db.commit()
         return True
-    finally:
-        await db.close()
 
 
 async def get_agent_runs(agent_id: str, user_id: str, limit: int = 20) -> list[AgentRun]:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         owner_stmt = select(AgentDefinition.id).where(
             AgentDefinition.id == agent_id,
             AgentDefinition.user_id == user_id,
@@ -179,13 +209,10 @@ async def get_agent_runs(agent_id: str, user_id: str, limit: int = 20) -> list[A
         )
         result = await db.execute(stmt)
         return list(result.scalars().all())
-    finally:
-        await db.close()
 
 
 async def get_agent_run(agent_id: str, run_id: str, user_id: str) -> AgentRun | None:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         owner_stmt = select(AgentDefinition.id).where(
             AgentDefinition.id == agent_id,
             AgentDefinition.user_id == user_id,
@@ -200,5 +227,3 @@ async def get_agent_run(agent_id: str, run_id: str, user_id: str) -> AgentRun | 
         )
         result = await db.execute(stmt)
         return result.scalar_one_or_none()
-    finally:
-        await db.close()

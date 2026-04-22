@@ -6,7 +6,7 @@ Provides the central primitive ``run_agent_once`` plus two thin wrappers:
 - ``_execute_agent_run`` -- the arq job handler that dequeues and calls
   ``run_agent_once`` with persistence + webhook semantics.
 
-All three entry points (Task tool, headless POST /api/agents/run, scheduler
+All three entry points (Agent tool, headless POST /api/agents/run, scheduler
 via Schedule rows that reference an agent name) ultimately call
 ``run_agent_once`` -- keeping the hot path in one place.
 """
@@ -37,6 +37,11 @@ class AgentRunResult:
     error: str | None
     tokens_used: int
     conversation_id: str | None = None
+    # Populated only when the caller passes ``capture_messages=True`` so they
+    # can resume the sub-conversation later (used by SendMessage / Agent
+    # teams). Default ``None`` keeps the structure cheap for the common
+    # one-shot dispatch path.
+    messages: list[dict[str, Any]] | None = None
 
 
 async def trigger_agent_run(
@@ -47,8 +52,7 @@ async def trigger_agent_run(
 
     Returns the pre-run record so callers can poll or return 202 Accepted.
     """
-    db = await get_db()
-    try:
+    async with get_db() as db:
         run = AgentRun(
             agent_id=agent_def.id,
             user_id=agent_def.user_id,
@@ -68,8 +72,6 @@ async def trigger_agent_run(
             started_at=run.started_at,
             tokens_used=0,
         )
-    finally:
-        await db.close()
 
     await enqueue(
         "execute_agent_run",
@@ -89,6 +91,8 @@ async def run_agent_once(
     parent_session_id: str | None = None,
     persist_conversation: bool = False,
     tool_filter: list[str] | None = None,
+    prior_messages: list[dict[str, Any]] | None = None,
+    capture_messages: bool = False,
 ) -> AgentRunResult:
     """Execute an agent once with the given prompt.
 
@@ -97,18 +101,25 @@ async def run_agent_once(
     system prompt + tool filter, and returns ``AgentRunResult``.
 
     ``tool_filter`` optionally narrows the agent's own ``tools_list`` further
-    (never widens it). Used by the ``Task`` tool when a caller wants to
+    (never widens it). Used by the ``Agent`` tool when a caller wants to
     restrict a subagent to a subset of its permitted tools.
 
     Side effects are opt-in:
       - ``persist_conversation=True`` saves the run's output as a Conversation
         row so it appears in the user's sidebar. Useful for scheduled/webhook
-        runs; NOT wanted for in-conversation Task tool calls (the parent
+        runs; NOT wanted for in-conversation Agent tool calls (the parent
         conversation is already the record).
 
     Webhooks used to fire here when AgentDefinition.webhook_url was set.
     That field has been dropped -- if we re-add webhook semantics they should
     live on the Schedule row, not the agent persona.
+
+    ``prior_messages`` lets callers resume an existing sub-conversation: when
+    provided, the new prompt is appended to that list and the run continues
+    from there instead of starting fresh. ``capture_messages`` populates the
+    final messages list on the returned ``AgentRunResult`` -- both are used
+    by the Agent-teams SendMessage path; default behaviour for one-shot
+    dispatches is unchanged.
     """
     from core import agent as agent_module
     from core.permissions import is_blocked, is_risky
@@ -127,8 +138,7 @@ async def run_agent_once(
     a_max_turns = agent_def.max_turns
 
     # Ensure we have an AgentRun row: create one if the caller didn't.
-    db = await get_db()
-    try:
+    async with get_db() as db:
         if run_id is None:
             run = AgentRun(
                 agent_id=agent_def.id,
@@ -140,8 +150,6 @@ async def run_agent_once(
             await db.commit()
             await db.refresh(run)
             run_id = run.id
-    finally:
-        await db.close()
 
     # Session context: tools that call current_session_get need a user.
     # Use a parent-derived id when delegating (Task tool passes one through),
@@ -179,7 +187,10 @@ async def run_agent_once(
         effective = [*effective, "Skill"]
     tools = get_tool_schemas(effective) if effective else get_all_tool_schemas()
 
-    messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
+    if prior_messages is not None:
+        messages = [*prior_messages, {"role": "user", "content": prompt}]
+    else:
+        messages = [{"role": "user", "content": prompt}]
 
     # Collect only the final assistant text -- drop mid-process narration
     # ("Let me search...", "Now fetching..."). Each tool_start marks a new
@@ -206,7 +217,12 @@ async def run_agent_once(
     error: str | None = None
 
     try:
-        await agent_module.run(
+        # ``agent.run`` rebinds its local messages list (repair_tool_use_pairs
+        # returns a fresh list), so we have to capture the return value to see
+        # the assistant turns it appended -- our local ``messages`` reference
+        # alone won't reflect them. Needed so ``capture_messages=True`` can
+        # surface a complete sub-conversation back to SendMessage.
+        final_messages = await agent_module.run(
             messages=messages,
             tools=tools,
             system=system,
@@ -218,6 +234,8 @@ async def run_agent_once(
             max_turns=a_max_turns,
             model=a_model,
         )
+        if final_messages:
+            messages = final_messages
         status = "completed"
     except Exception as e:
         status = "failed"
@@ -229,58 +247,56 @@ async def run_agent_once(
     now = datetime.now(timezone.utc)
     conv_id: str | None = None
 
-    db = await get_db()
-    try:
-        if persist_conversation:
-            conv = Conversation(
-                user_id=user_id,
-                title=f"[Agent] {a_name}",
-                model=a_model,
-            )
-            db.add(conv)
-            await db.flush()
-            conv_id = conv.id
+    async with get_db() as db:
+        try:
+            if persist_conversation:
+                conv = Conversation(
+                    user_id=user_id,
+                    title=f"[Agent] {a_name}",
+                    model=a_model,
+                )
+                db.add(conv)
+                await db.flush()
+                conv_id = conv.id
 
-            db.add(DbMessage(
-                conversation_id=conv_id,
-                role="user",
-                content=prompt,
-            ))
-            if full_text:
                 db.add(DbMessage(
                     conversation_id=conv_id,
-                    role="assistant",
-                    content=full_text,
+                    role="user",
+                    content=prompt,
                 ))
-            elif error:
-                db.add(DbMessage(
-                    conversation_id=conv_id,
-                    role="assistant",
-                    content=f"Agent run failed: {error}",
-                ))
+                if full_text:
+                    db.add(DbMessage(
+                        conversation_id=conv_id,
+                        role="assistant",
+                        content=full_text,
+                    ))
+                elif error:
+                    db.add(DbMessage(
+                        conversation_id=conv_id,
+                        role="assistant",
+                        content=f"Agent run failed: {error}",
+                    ))
 
-        await db.execute(
-            update(AgentRun)
-            .where(AgentRun.id == run_id)
-            .values(
-                status=status,
-                result=result_text,
-                error=error,
-                finished_at=now,
-                tokens_used=tokens_used,
-                conversation_id=conv_id,
+            await db.execute(
+                update(AgentRun)
+                .where(AgentRun.id == run_id)
+                .values(
+                    status=status,
+                    result=result_text,
+                    error=error,
+                    finished_at=now,
+                    tokens_used=tokens_used,
+                    conversation_id=conv_id,
+                )
             )
-        )
-        await db.execute(
-            update(AgentDefinition)
-            .where(AgentDefinition.id == agent_def.id)
-            .values(last_run_at=now)
-        )
-        await db.commit()
-    except Exception as e:
-        logger.error(f"Failed to persist agent run {run_id}: {e}")
-    finally:
-        await db.close()
+            await db.execute(
+                update(AgentDefinition)
+                .where(AgentDefinition.id == agent_def.id)
+                .values(last_run_at=now)
+            )
+            await db.commit()
+        except Exception as e:
+            logger.error(f"Failed to persist agent run {run_id}: {e}")
 
     return AgentRunResult(
         run_id=run_id,
@@ -289,6 +305,7 @@ async def run_agent_once(
         error=error,
         tokens_used=tokens_used,
         conversation_id=conv_id,
+        messages=messages if capture_messages else None,
     )
 
 
@@ -302,12 +319,9 @@ async def _execute_agent_run(
     """Background job: looks up the agent + existing run row, runs it,
     persists output as a Conversation, fires webhook, notifies connected WS clients.
     """
-    db = await get_db()
-    try:
+    async with get_db() as db:
         res = await db.execute(select(AgentDefinition).where(AgentDefinition.id == agent_id))
         agent_def = res.scalar_one_or_none()
-    finally:
-        await db.close()
 
     if not agent_def:
         logger.error(f"Agent {agent_id} not found; aborting run {run_id}")

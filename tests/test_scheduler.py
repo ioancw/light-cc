@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -178,8 +179,9 @@ class TestNotifyUser:
 async def scheduler_db(test_db: AsyncSession, test_user):
     """Patch core.scheduler.get_db (and agent_crud/agent_runner) to use test_db."""
 
+    @asynccontextmanager
     async def _get_test_db():
-        return test_db
+        yield test_db
 
     with patch("core.scheduler.get_db", side_effect=_get_test_db), \
          patch("core.agent_crud.get_db", side_effect=_get_test_db), \

@@ -51,8 +51,7 @@ async def list_conversations(
     offset: int = Query(0, ge=0, description="Number of records to skip"),
     user: User = Depends(get_current_user),
 ):
-    db = await get_db()
-    try:
+    async with get_db() as db:
         stmt = (
             select(Conversation)
             .where(Conversation.user_id == user.id, Conversation.is_deleted == False)
@@ -62,8 +61,6 @@ async def list_conversations(
         stmt = stmt.order_by(Conversation.updated_at.desc()).offset(offset).limit(limit)
         result = await db.execute(stmt)
         rows = result.scalars().all()
-    finally:
-        await db.close()
 
     # A cid can reference a saved conversation as either "srv_<id>" (sidebar
     # load) or the raw server id (resume paths). Check both forms against the
@@ -101,8 +98,7 @@ async def search_conversations_endpoint(
 
 @router.get("/{conversation_id}", response_model=ConversationDetail)
 async def get_conversation(conversation_id: str, user: User = Depends(get_current_user)):
-    db = await get_db()
-    try:
+    async with get_db() as db:
         result = await db.execute(
             select(Conversation).where(
                 Conversation.id == conversation_id,
@@ -120,8 +116,6 @@ async def get_conversation(conversation_id: str, user: User = Depends(get_curren
             .order_by(Message.created_at, Message.id)
         )
         messages = msg_result.scalars().all()
-    finally:
-        await db.close()
 
     import json
     msg_list = []
@@ -149,8 +143,7 @@ async def update_conversation(
     req: UpdateConversationRequest,
     user: User = Depends(get_current_user),
 ):
-    db = await get_db()
-    try:
+    async with get_db() as db:
         result = await db.execute(
             select(Conversation).where(
                 Conversation.id == conversation_id,
@@ -178,8 +171,6 @@ async def update_conversation(
                 .values(**values)
             )
             await db.commit()
-    finally:
-        await db.close()
 
     return {"status": "ok"}
 
@@ -199,8 +190,7 @@ async def fork_conversation_endpoint(conversation_id: str, user: User = Depends(
 
 @router.delete("/{conversation_id}")
 async def delete_conversation(conversation_id: str, user: User = Depends(get_current_user)):
-    db = await get_db()
-    try:
+    async with get_db() as db:
         result = await db.execute(
             select(Conversation).where(
                 Conversation.id == conversation_id,
@@ -220,8 +210,6 @@ async def delete_conversation(conversation_id: str, user: User = Depends(get_cur
             .values(is_deleted=True)
         )
         await db.commit()
-    finally:
-        await db.close()
 
     return {"status": "deleted"}
 
@@ -300,8 +288,7 @@ async def import_conversation(
         title = title_match.group(1).strip() if title_match else (file.filename or "Imported document")
         messages = [{"role": "user", "content": text.strip()}]
 
-    db = await get_db()
-    try:
+    async with get_db() as db:
         conv = Conversation(user_id=user.id, title=title, model=None)
         db.add(conv)
         await db.flush()
@@ -315,8 +302,6 @@ async def import_conversation(
 
         await db.commit()
         conv_id = conv.id
-    finally:
-        await db.close()
 
     return {
         "conversation_id": conv_id,

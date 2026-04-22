@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from contextlib import AsyncExitStack
 from typing import Any
 
@@ -19,6 +20,23 @@ logger = logging.getLogger(__name__)
 
 # Separator between server name and tool name in namespaced tool IDs
 _NS_SEP = "__"
+
+
+def _stdio_allowlist() -> set[str]:
+    """Admin-controlled allowlist of MCP stdio server names permitted to spawn.
+
+    Env var `MCP_STDIO_ALLOWLIST` is a comma-separated list. Empty/unset means
+    no stdio servers may spawn — only HTTP MCP servers are allowed. This exists
+    because stdio spawns an arbitrary subprocess inside the app container.
+    """
+    raw = os.environ.get("MCP_STDIO_ALLOWLIST", "").strip()
+    if not raw:
+        return set()
+    return {part.strip() for part in raw.split(",") if part.strip()}
+
+
+class MCPStdioNotAllowed(RuntimeError):
+    """Raised when an MCP stdio spawn is requested for a non-allowlisted server."""
 
 
 class MCPServerConnection:
@@ -72,7 +90,18 @@ class MCPManager:
         args: list[str] | None = None,
         env: dict[str, str] | None = None,
     ) -> MCPServerConnection:
-        """Start an MCP server as a subprocess and connect via stdio."""
+        """Start an MCP server as a subprocess and connect via stdio.
+
+        Gated on the admin-set `MCP_STDIO_ALLOWLIST` env var to stop a
+        plugin drop-in from silently spawning arbitrary local processes.
+        """
+        allowed = _stdio_allowlist()
+        if name not in allowed:
+            raise MCPStdioNotAllowed(
+                f"MCP stdio server '{name}' not in MCP_STDIO_ALLOWLIST. "
+                "Add it to the env var on the host and restart to enable."
+            )
+
         if name in self._servers:
             logger.warning(f"MCP server '{name}' already connected, disconnecting first")
             await self.disconnect(name)
@@ -252,6 +281,8 @@ async def load_mcp_config(config_path: str) -> MCPManager:
                     args=server_config.get("args", []),
                     env=server_config.get("env"),
                 )
+        except MCPStdioNotAllowed as e:
+            logger.warning(f"Skipping MCP server '{name}': {e}")
         except Exception as e:
             logger.error(f"Failed to connect MCP server '{name}': {e}")
 

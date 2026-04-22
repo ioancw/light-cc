@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import platform as _platform
 import sys as _sys
+from datetime import date as _date
 from pathlib import Path
 
 from core.config import settings
@@ -112,6 +113,7 @@ def build_system_prompt(
     outputs_dir: str | None = None,
     available_agents: list[tuple[str, str]] | None = None,
     allowed_skills: list[str] | None = None,
+    routing_hint: str | None = None,
 ) -> str:
     """Compose the final system prompt for a chat turn.
 
@@ -120,6 +122,13 @@ def build_system_prompt(
     ``plugin:skill`` forms). Used by agent runs so an agent only sees the
     skills it composes, not every globally-registered skill. ``None``
     preserves the chat-default of exposing all skills.
+
+    ``routing_hint`` is a per-turn nudge written by the chat handler when
+    a deterministic intent matcher (``match_agent_by_intent``) thinks the
+    user's message should be delegated to a specific agent. It rides at
+    the very top of the prompt so the model sees it before any other
+    instruction. The matcher itself never dispatches -- the model still
+    decides whether to follow the hint.
 
     Deferred imports for skills/commands avoid a load-order issue: this module
     is imported from core/, but the registries live above core/ and are
@@ -132,6 +141,57 @@ def build_system_prompt(
     if outputs_dir:
         base = base.replace(str(DEFAULT_OUTPUTS_DIR), str(outputs_dir))
     parts = [base]
+
+    # Today's date -- evaluated per turn so a long-running server doesn't
+    # serve stale dates. Without this, skills that timestamp output (e.g.
+    # person-research's `Prepared:` line and `<lastname>-<co>-<YYYYMMDD>`
+    # filename) silently default to the model's training-cutoff date.
+    parts.append(f"\nToday's date: {_date.today().isoformat()}")
+
+    # Per-turn routing nudge -- highest priority.
+    if routing_hint:
+        parts.append(f"\n## TURN ROUTING -- read first\n{routing_hint}")
+
+    # Available agents block -- moved above other sections so the model
+    # absorbs specialist routing rules before tool guides or memory.
+    if available_agents:
+        agent_lines = [f"- **{name}** -- {desc}" for name, desc in available_agents]
+        parts.append(
+            "\n## ROUTING -- read before responding\n"
+            "The user has configured the specialist agents below. When an "
+            "incoming request matches one of their descriptions, you MUST "
+            "delegate to that agent via the `Agent` tool rather than handle "
+            "the task inline with raw tools like WebSearch, WebFetch, Read, "
+            "or Write. The user set these agents up precisely so you would "
+            "route to them -- bypassing them produces inconsistent, "
+            "unstructured output.\n\n"
+            "Worked example -- if a user has an agent `person-research` "
+            "described as \"Research a person; find LinkedIn, email, recent "
+            "news\" and types \"research John at Acme\":\n"
+            "  CORRECT: call `Agent(agent_type=\"person-research\", "
+            "prompt=\"Research John at Acme\")`.\n"
+            "  WRONG: call WebSearch / WebFetch / Read directly to do the "
+            "research yourself.\n\n"
+            "To delegate: call `Agent(agent_type=\"<agent-name>\", "
+            "prompt=\"<full task details including the original user "
+            "message and any context you have>\")`. Do not paraphrase or "
+            "summarize the task before handing off -- pass it verbatim.\n\n"
+            "Only handle a request inline if NO listed agent fits. When in "
+            "doubt between two agents, pick the more specific one.\n\n"
+            "**Agent teams pattern.** For tasks that benefit from multiple "
+            "specialists (\"review this with your team\", \"get a second "
+            "opinion\"), spawn each in parallel by emitting several "
+            "`Agent(...)` calls in a single turn. Each call returns an "
+            "`agent_id`. To follow up with one specialist without "
+            "respawning -- e.g. ask a clarifying question or feed back "
+            "another specialist's finding -- call "
+            "`SendMessage(to=\"<agent_id>\", message=\"<next prompt>\")`. "
+            "The subagent keeps its system prompt, tools, and full "
+            "sub-conversation history. Combine outputs at the end and "
+            "respond to the user.\n\n"
+            "Agents available to this user:\n" + "\n".join(agent_lines)
+        )
+
     if project_config:
         parts.append(f"\n## Project Instructions\n{project_config}")
     if rules_text:
@@ -175,25 +235,5 @@ def build_system_prompt(
             hint = f" {c.argument_hint}" if c.argument_hint else ""
             cmd_lines.append(f"- /{c.name}{hint}: {c.description}")
         parts.append("\n## Available Commands\n" + "\n".join(cmd_lines))
-
-    if available_agents:
-        agent_lines = [f"- **{name}** -- {desc}" for name, desc in available_agents]
-        parts.append(
-            "\n## Available Agents\n"
-            "The user has configured the specialist agents below. When an "
-            "incoming request matches one of their descriptions, you MUST "
-            "delegate to that agent via the `Agent` tool rather than perform "
-            "the task inline with raw tools like WebSearch, WebFetch, Read, "
-            "or Write. The user set these agents up precisely so you would "
-            "route to them -- bypassing them produces inconsistent, "
-            "unstructured output.\n\n"
-            "To delegate: call `Agent(agent_type=\"<agent-name>\", "
-            "prompt=\"<task details>\")`. Pass the full user request, plus "
-            "any context you have, as `prompt`. Do not paraphrase or "
-            "summarize the task before handing off.\n\n"
-            "Only handle a request inline if NO listed agent fits. When in "
-            "doubt between two agents, pick the more specific one.\n\n"
-            "Agents available to this user:\n" + "\n".join(agent_lines)
-        )
 
     return "\n".join(parts)

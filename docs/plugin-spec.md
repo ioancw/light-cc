@@ -7,15 +7,20 @@ my-plugin/
     .claude-plugin/
         plugin.json           # Required: plugin manifest
     .mcp.json                 # Optional: MCP server definitions
-    commands/
-        my-command.md         # Optional: slash commands
     skills/
         my-skill/
             SKILL.md          # Optional: skills (auto-namespaced as plugin-name:skill-name)
+    commands/
+        my-command.md         # Optional: legacy CC commands (loaded as `kind="legacy-command"` skills)
     agents/
         my-agent/
             AGENT.md          # Optional: agent definitions (auto-namespaced as plugin-name:agent-name)
 ```
+
+> `skills/` is the canonical surface in CC 2.1+. `commands/*.md` is still
+> supported as a drop-in compat path so plugins authored against older CC
+> versions keep working — they're loaded into the same registry and dispatch
+> identically to `/<plugin>:<command-name>`.
 
 ## plugin.json Schema
 

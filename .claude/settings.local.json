@@ -57,7 +57,22 @@
       "Bash(sqlite3 *)",
       "Bash(DATABASE_URL=postgresql+asyncpg://test python -c \"from core.config import settings; print\\('db:', settings.database_url\\); print\\('frontend:', settings.server.frontend\\)\")",
       "Bash(xargs -I {} basename {})",
-      "Bash(wait %1)"
+      "Bash(wait %1)",
+      "Read(//c/Users/ioanc/.claude/**)",
+      "Bash([ -s \"C:\\\\\\\\Users\\\\\\\\ioanc\\\\\\\\AppData\\\\\\\\Local\\\\\\\\Temp\\\\\\\\claude\\\\\\\\C--Users-ioanc-github-light-cc\\\\\\\\4e85a153-2034-422f-8d2e-ae49ed587da9\\\\\\\\tasks\\\\\\\\b1gjc90ge.output\" ])",
+      "Bash(tail -100 \"C:\\\\\\\\Users\\\\\\\\ioanc\\\\\\\\AppData\\\\\\\\Local\\\\\\\\Temp\\\\\\\\claude\\\\\\\\C--Users-ioanc-github-light-cc\\\\\\\\4e85a153-2034-422f-8d2e-ae49ed587da9\\\\\\\\tasks\\\\\\\\b1gjc90ge.output\")",
+      "Bash([ -s \"C:\\\\\\\\Users\\\\\\\\ioanc\\\\\\\\AppData\\\\\\\\Local\\\\\\\\Temp\\\\\\\\claude\\\\\\\\C--Users-ioanc-github-light-cc\\\\\\\\4e85a153-2034-422f-8d2e-ae49ed587da9\\\\\\\\tasks\\\\\\\\bfa47jcac.output\" ])",
+      "Bash(tail -60 \"C:\\\\\\\\Users\\\\\\\\ioanc\\\\\\\\AppData\\\\\\\\Local\\\\\\\\Temp\\\\\\\\claude\\\\\\\\C--Users-ioanc-github-light-cc\\\\\\\\4e85a153-2034-422f-8d2e-ae49ed587da9\\\\\\\\tasks\\\\\\\\bfa47jcac.output\")",
+      "Bash(wc *)",
+      "Bash([ -s \"C:\\\\\\\\Users\\\\\\\\ioanc\\\\\\\\AppData\\\\\\\\Local\\\\\\\\Temp\\\\\\\\claude\\\\\\\\C--Users-ioanc-github-light-cc\\\\\\\\4e85a153-2034-422f-8d2e-ae49ed587da9\\\\\\\\tasks\\\\\\\\bgzea2q9q.output\" ])",
+      "Bash(tail -100 \"C:\\\\\\\\Users\\\\\\\\ioanc\\\\\\\\AppData\\\\\\\\Local\\\\\\\\Temp\\\\\\\\claude\\\\\\\\C--Users-ioanc-github-light-cc\\\\\\\\4e85a153-2034-422f-8d2e-ae49ed587da9\\\\\\\\tasks\\\\\\\\bgzea2q9q.output\")",
+      "Bash([ -s \"C:\\\\\\\\Users\\\\\\\\ioanc\\\\\\\\AppData\\\\\\\\Local\\\\\\\\Temp\\\\\\\\claude\\\\\\\\C--Users-ioanc-github-light-cc\\\\\\\\4e85a153-2034-422f-8d2e-ae49ed587da9\\\\\\\\tasks\\\\\\\\bj547p1m2.output\" ])",
+      "Bash(tail -20 \"C:\\\\\\\\Users\\\\\\\\ioanc\\\\\\\\AppData\\\\\\\\Local\\\\\\\\Temp\\\\\\\\claude\\\\\\\\C--Users-ioanc-github-light-cc\\\\\\\\4e85a153-2034-422f-8d2e-ae49ed587da9\\\\\\\\tasks\\\\\\\\bj547p1m2.output\")",
+      "Bash(awk 'NR==256{u2=$0; next} NR==257{print $0; print u2; next} {print}' \"C:\\\\Users\\\\ioanc\\\\.claude\\\\plans\\\\bright-folding-meadow.md\")",
+      "Bash(mv \"C:\\\\Users\\\\ioanc\\\\.claude\\\\plans\\\\bright-folding-meadow.md.tmp\" \"C:\\\\Users\\\\ioanc\\\\.claude\\\\plans\\\\bright-folding-meadow.md\")",
+      "Bash(echo \"\")",
+      "Bash(echo \"---\")",
+      "Bash(echo \"- **P1/P2/P3 complete \\(2026-04-19\\):** toasts on user-initiated API errors + non-spammy logging for background fetches; WS reconnect banner with countdown; InputBar disabled while conversation loads; hover actions forced visible on touch devices; Settings focus trap + Escape close + focus return; aria-busy on auth submit; Toast role/aria-live/aria-label; live OS theme following when no pinned choice; ToolCall red on \\\\`is_error\\\\`/\\\\`status=error\\\\`; plotly \\\\`console.error\\\\` guarded by \\\\`import.meta.env.DEV\\\\`; hardcoded \\\\\"Wiggy\\\\\" centralized in \\\\`frontend/src/brand.js\\\\` \\(VITE_BRAND_NAME override\\), used by Auth/Sidebar/MessageBubble. \\\\`npm run build\\\\` green.\")"
     ]
   }
 }

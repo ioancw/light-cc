@@ -346,8 +346,7 @@ async def save_conversation(cid: str) -> str | None:
         conv_id = cs.get("conversation_id")
         active_model = cs.get("active_model") or settings.model
 
-        db = await get_db()
-        try:
+        async with get_db() as db:
             try:
                 if conv_id is None:
                     title = _derive_title(cs["messages"])
@@ -382,8 +381,6 @@ async def save_conversation(cid: str) -> str | None:
                 # can never truncate a conversation's message history.
                 await db.rollback()
                 raise
-        finally:
-            await db.close()
 
         # S3: opportunistically enqueue auto-memory extraction.
         # Cheap short-circuit: skip the default user and unsaved conversations.
@@ -408,13 +405,10 @@ async def _maybe_enqueue_extract(cs: dict, user_id: str, conv_id: str) -> None:
     from core.job_queue import enqueue
     from sqlalchemy import select
 
-    db = await get_db()
-    try:
+    async with get_db() as db:
         user = (await db.execute(
             select(User).where(User.id == user_id)
         )).scalar_one_or_none()
-    finally:
-        await db.close()
 
     if user is None or not user.auto_extract_enabled:
         return
@@ -449,8 +443,7 @@ async def load_conversation(
     from core.db_models import Conversation, Message
     from sqlalchemy import select
 
-    db = await get_db()
-    try:
+    async with get_db() as db:
         if user_id is not None:
             owner_row = (await db.execute(
                 select(Conversation.id).where(
@@ -466,8 +459,6 @@ async def load_conversation(
             .order_by(Message.created_at, Message.id)
         )
         rows = result.scalars().all()
-    finally:
-        await db.close()
 
     messages = []
     for row in rows:
@@ -499,8 +490,7 @@ async def fork_conversation(source_conv_id: str, user_id: str) -> tuple[str, lis
         from core.database import get_db
         from core.db_models import Conversation, Message
 
-        db = await get_db()
-        try:
+        async with get_db() as db:
             title = _derive_title(messages) + " (fork)"
             conv = Conversation(user_id=user_id, title=title, model=settings.model)
             db.add(conv)
@@ -518,8 +508,6 @@ async def fork_conversation(source_conv_id: str, user_id: str) -> tuple[str, lis
                 ))
 
             await db.commit()
-        finally:
-            await db.close()
 
         return new_conv_id, messages
 

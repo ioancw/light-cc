@@ -118,6 +118,31 @@
   });
 
   let topbarTitle = $derived(currentConversation()?.title || 'New conversation');
+
+  // Reconnect banner: counts down to the next scheduled reconnect attempt.
+  // `tickNow` ticks once a second while we're offline so the countdown is reactive.
+  let tickNow = $state(Date.now());
+  let tickTimer = null;
+  $effect(() => {
+    const offline = !appState.connected && appState.reconnectAt != null;
+    if (offline && !tickTimer) {
+      tickTimer = setInterval(() => { tickNow = Date.now(); }, 500);
+    }
+    if (!offline && tickTimer) {
+      clearInterval(tickTimer);
+      tickTimer = null;
+    }
+    return () => {
+      if (tickTimer) { clearInterval(tickTimer); tickTimer = null; }
+    };
+  });
+  let reconnectSeconds = $derived.by(() => {
+    if (!appState.reconnectAt) return 0;
+    return Math.max(0, Math.ceil((appState.reconnectAt - tickNow) / 1000));
+  });
+  let showReconnectBanner = $derived(
+    !appState.connected && (appState.connecting || appState.reconnectAt != null)
+  );
 </script>
 
 <div class="app" class:sidebar-hidden={appState.sidebarCollapsed}>
@@ -210,6 +235,19 @@
       </div>
     </div>
 
+    {#if showReconnectBanner}
+      <div class="reconnect-banner" role="status" aria-live="polite">
+        <span class="reconnect-dot"></span>
+        {#if appState.connecting}
+          Reconnecting...
+        {:else if reconnectSeconds > 0}
+          Connection lost. Retrying in {reconnectSeconds}s...
+        {:else}
+          Reconnecting...
+        {/if}
+      </div>
+    {/if}
+
     <ChatArea />
     <InputBar />
   </main>
@@ -277,6 +315,37 @@
     font-family: var(--font-ui);
     font-size: 14px;
     min-width: 0;
+  }
+
+  .reconnect-banner {
+    flex-shrink: 0;
+    padding: 6px 16px;
+    background: color-mix(in srgb, var(--amber) 12%, var(--surface));
+    border-bottom: 1px solid color-mix(in srgb, var(--amber) 40%, var(--border));
+    color: var(--amber, #d4a017);
+    font-family: var(--font-ui);
+    font-size: 12px;
+    letter-spacing: 0.02em;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    animation: reconnect-banner-in 0.2s ease;
+  }
+  .reconnect-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+    animation: reconnect-pulse 1s ease-in-out infinite;
+  }
+  @keyframes reconnect-banner-in {
+    from { opacity: 0; transform: translateY(-4px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes reconnect-pulse {
+    0%, 100% { opacity: 0.4; }
+    50% { opacity: 1; }
   }
 
   .topbar-status {

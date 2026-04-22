@@ -58,29 +58,35 @@ def _validate_manifest(manifest_path: Path) -> dict:
     return manifest
 
 
+def _reject_symlinks(root: Path) -> None:
+    """Raise PluginError if any entry under root is a symlink.
+
+    Plugins are trusted code after install but the *install path* must not be
+    able to smuggle in files that resolve outside the plugin root (e.g. a
+    symlink pointing at /etc/shadow that later gets read by a skill).
+    """
+    for entry in root.rglob("*"):
+        if entry.is_symlink():
+            raise PluginError(
+                f"Plugin source contains a symlink ({entry.relative_to(root)}); refusing to install."
+            )
+
+
 async def _install_dependencies(manifest: dict, plugin_dir: Path) -> None:
-    """Install Python and NPM dependencies declared in the manifest."""
+    """Record declared dependencies but do NOT auto-install them.
+
+    Auto `pip install` / `npm install` inside the app container is remote code
+    execution under the app's uid. Admin must run an explicit enable step to
+    install deps out-of-band (documented).
+    """
     deps = manifest.get("dependencies", {})
     python_deps = deps.get("python", [])
     npm_deps = deps.get("npm", [])
-
-    if python_deps:
-        logger.info(f"Installing Python deps: {python_deps}")
-        await asyncio.to_thread(
-            subprocess.run,
-            [sys.executable, "-m", "pip", "install", *python_deps],
-            check=True,
-            capture_output=True,
-        )
-
-    if npm_deps:
-        logger.info(f"Installing NPM deps: {npm_deps}")
-        await asyncio.to_thread(
-            subprocess.run,
-            ["npm", "install", *npm_deps],
-            cwd=str(plugin_dir),
-            check=True,
-            capture_output=True,
+    if python_deps or npm_deps:
+        logger.info(
+            "Plugin '%s' declares deps (python=%s, npm=%s). Auto-install is disabled; "
+            "install manually on the host and restart.",
+            manifest.get("name", "?"), python_deps, npm_deps,
         )
 
 
@@ -103,8 +109,15 @@ async def install_from_path(source: Path) -> dict:
             f"Plugin '{name}' already installed. Use update or uninstall first."
         )
 
+    _reject_symlinks(source)
     plugins_dir.mkdir(parents=True, exist_ok=True)
-    await asyncio.to_thread(shutil.copytree, source, dest)
+    await asyncio.to_thread(
+        shutil.copytree,
+        source,
+        dest,
+        symlinks=False,
+        ignore_dangling_symlinks=True,
+    )
     await _install_dependencies(manifest, dest)
     return manifest
 
@@ -136,6 +149,12 @@ async def install_from_git(url: str) -> dict:
 
     try:
         manifest = _validate_manifest(manifest_path)
+    except PluginError:
+        await asyncio.to_thread(shutil.rmtree, tmp_dir, True)
+        raise
+
+    try:
+        _reject_symlinks(tmp_dir)
     except PluginError:
         await asyncio.to_thread(shutil.rmtree, tmp_dir, True)
         raise

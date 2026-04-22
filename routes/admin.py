@@ -25,8 +25,7 @@ async def require_admin(user: UserModel = Depends(get_current_user)) -> UserMode
 @router.get("/users")
 async def list_users(admin: UserModel = Depends(require_admin)):
     """List all registered users with basic stats."""
-    db = await get_db()
-    try:
+    async with get_db() as db:
         result = await db.execute(
             select(
                 User.id,
@@ -41,8 +40,6 @@ async def list_users(admin: UserModel = Depends(require_admin)):
             .order_by(User.created_at.desc())
         )
         rows = result.all()
-    finally:
-        await db.close()
 
     return [
         {
@@ -68,8 +65,7 @@ async def update_user(
         raise HTTPException(status_code=400, detail="Cannot modify your own admin status")
 
     from sqlalchemy import update
-    db = await get_db()
-    try:
+    async with get_db() as db:
         result = await db.execute(select(User).where(User.id == user_id))
         user = result.scalar_one_or_none()
         if not user:
@@ -82,8 +78,6 @@ async def update_user(
         if values:
             await db.execute(update(User).where(User.id == user_id).values(**values))
             await db.commit()
-    finally:
-        await db.close()
 
     return {"status": "ok"}
 
@@ -93,8 +87,7 @@ async def update_user(
 @router.get("/usage")
 async def usage_overview(admin: UserModel = Depends(require_admin)):
     """Aggregate usage stats across all users."""
-    db = await get_db()
-    try:
+    async with get_db() as db:
         # Total stats
         total_result = await db.execute(
             select(
@@ -136,8 +129,6 @@ async def usage_overview(admin: UserModel = Depends(require_admin)):
             .order_by(func.sum(UsageEvent.cost_usd).desc())
         )
         per_model = per_model_result.all()
-    finally:
-        await db.close()
 
     return {
         "totals": {

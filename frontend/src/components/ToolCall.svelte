@@ -39,8 +39,12 @@
     catch { return { _raw: raw }; }
   });
 
-  // Detect error results
-  let isError = $derived(parsed && typeof parsed.error === 'string');
+  // Detect error results: explicit backend flag, the status set in ws.js, or a parsed error field.
+  let isError = $derived(
+    tc.is_error === true
+      || tc.status === 'error'
+      || (parsed && typeof parsed.error === 'string')
+  );
 
   // Tool-specific header summary (shown in collapsed header)
   let headerSummary = $derived.by(() => {
@@ -147,7 +151,7 @@
   });
 </script>
 
-<div class="tool-block" class:expanded role="region" aria-label="{tc.name} tool call">
+<div class="tool-block" class:expanded class:errored={isError} role="region" aria-label="{tc.name} tool call">
   <button class="tool-header" onclick={toggle} aria-expanded={expanded}>
     <div class="tool-status-dot" class:running={tc.status === 'running'} class:done={tc.status === 'done'} class:error={tc.status === 'error'}></div>
     <span class="tool-name">{tc.name}</span>
@@ -372,6 +376,11 @@
   }
   .tool-block:hover { border-left-color: var(--accent-soft); }
   .tool-block.expanded { border-left-color: var(--accent); }
+  .tool-block.errored {
+    border-left-color: var(--red);
+    background: color-mix(in srgb, var(--red) 6%, transparent);
+  }
+  .tool-block.errored .tool-name { color: var(--red); }
 
   .tool-header {
     padding: 6px 4px;

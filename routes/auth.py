@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import time
-from collections import defaultdict
-
 from pydantic import BaseModel, EmailStr
 
 from fastapi import APIRouter, HTTPException, Depends, Request
@@ -24,32 +21,23 @@ from core.auth import (
 from core.config import settings
 from core.database import get_db
 from core.db_models import User
+from core.rate_limit import _client_ip, check_auth_rate_limit
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 _bearer = HTTPBearer()
 
 
-# ── IP-based rate limiting for auth endpoints ────────────────────────
-
-_AUTH_MAX_ATTEMPTS = 10  # per window
-_AUTH_WINDOW_SECONDS = 300  # 5 minutes
-_auth_attempts: dict[str, list[float]] = defaultdict(list)
-
-
-def _check_auth_rate_limit(request: Request) -> None:
-    """Raise 429 if the IP has exceeded auth attempt limits."""
-    ip = request.client.host if request.client else "unknown"
-    now = time.time()
-    cutoff = now - _AUTH_WINDOW_SECONDS
-
-    # Prune old entries
-    attempts = _auth_attempts[ip]
-    _auth_attempts[ip] = [t for t in attempts if t > cutoff]
-
-    if len(_auth_attempts[ip]) >= _AUTH_MAX_ATTEMPTS:
-        raise HTTPException(status_code=429, detail="Too many attempts. Try again later.")
-
-    _auth_attempts[ip].append(now)
+async def _enforce_auth_rate_limit(request: Request, email: str | None) -> None:
+    """Raise 429 (with Retry-After) if this (email, IP) pair is over limit."""
+    ip = _client_ip(request)
+    allowed, retry = await check_auth_rate_limit(email or "", ip)
+    if not allowed:
+        retry_int = max(int(retry), 1)
+        raise HTTPException(
+            status_code=429,
+            detail="Too many attempts. Try again later.",
+            headers={"Retry-After": str(retry_int)},
+        )
 
 
 # ── Request / response schemas ───────────────────────────────────────
@@ -101,11 +89,8 @@ async def get_current_user(creds: HTTPAuthorizationCredentials = Depends(_bearer
         raise HTTPException(status_code=401, detail="Invalid or expired token")
     if await is_token_revoked(raw):
         raise HTTPException(status_code=401, detail="Token has been revoked")
-    db = await get_db()
-    try:
+    async with get_db() as db:
         user = await get_user_by_id(db, payload["sub"])
-    finally:
-        await db.close()
     if user is None:
         raise HTTPException(status_code=401, detail="User not found")
     return user
@@ -113,13 +98,13 @@ async def get_current_user(creds: HTTPAuthorizationCredentials = Depends(_bearer
 
 # ── Endpoints ─────────────────────────────────────────────────────────
 
-@router.post("/register", response_model=TokenResponse, dependencies=[Depends(_check_auth_rate_limit)])
-async def register(req: RegisterRequest):
+@router.post("/register", response_model=TokenResponse)
+async def register(req: RegisterRequest, request: Request):
+    await _enforce_auth_rate_limit(request, req.email)
     if not settings.auth.registration_enabled:
         raise HTTPException(status_code=403, detail="Registration is disabled")
 
-    db = await get_db()
-    try:
+    async with get_db() as db:
         existing = await get_user_by_email(db, req.email)
         if existing:
             raise HTTPException(status_code=409, detail="Email already registered")
@@ -132,8 +117,6 @@ async def register(req: RegisterRequest):
         db.add(user)
         await db.commit()
         await db.refresh(user)
-    finally:
-        await db.close()
 
     # Seed YAML-defined agents for the new user, so they see the shipped
     # example agents in AgentPanel on first login. Best-effort.
@@ -172,13 +155,11 @@ async def register(req: RegisterRequest):
     )
 
 
-@router.post("/login", response_model=TokenResponse, dependencies=[Depends(_check_auth_rate_limit)])
-async def login(req: LoginRequest):
-    db = await get_db()
-    try:
+@router.post("/login", response_model=TokenResponse)
+async def login(req: LoginRequest, request: Request):
+    await _enforce_auth_rate_limit(request, req.email)
+    async with get_db() as db:
         user = await authenticate_user(db, req.email, req.password)
-    finally:
-        await db.close()
 
     if user is None:
         raise HTTPException(status_code=401, detail="Invalid email or password")
@@ -190,8 +171,12 @@ async def login(req: LoginRequest):
     )
 
 
-@router.post("/refresh", response_model=TokenResponse, dependencies=[Depends(_check_auth_rate_limit)])
-async def refresh(req: RefreshRequest):
+@router.post("/refresh", response_model=TokenResponse)
+async def refresh(req: RefreshRequest, request: Request):
+    # Refresh has no email in the request body; rate limit by IP only
+    # (passing empty email just means the hash component is constant,
+    # which is fine — the IP component still disambiguates actors).
+    await _enforce_auth_rate_limit(request, email=None)
     payload = decode_token(req.refresh_token)
     if payload is None or payload.get("type") != "refresh":
         raise HTTPException(status_code=401, detail="Invalid or expired refresh token")
@@ -199,11 +184,8 @@ async def refresh(req: RefreshRequest):
     if await is_token_revoked(req.refresh_token):
         raise HTTPException(status_code=401, detail="Refresh token has been revoked")
 
-    db = await get_db()
-    try:
+    async with get_db() as db:
         user = await get_user_by_id(db, payload["sub"])
-    finally:
-        await db.close()
 
     if user is None:
         raise HTTPException(status_code=401, detail="User not found")

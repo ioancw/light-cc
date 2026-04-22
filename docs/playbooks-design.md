@@ -1,7 +1,7 @@
 # Playbooks: encode-vs-decide for agent chaining
 
 Design notes from conversation on 2026-04-17/18. Captures the reasoning behind a
-proposed "playbook" primitive that sits between free-form `Task` delegation and
+proposed "playbook" primitive that sits between free-form `Agent` delegation and
 fully-encoded workflows.
 
 ## The question
@@ -16,7 +16,7 @@ form.
 
 Two extremes already exist in the codebase:
 
-- **Free-form (LLM-decided)** — the main agent calls `Task` (`tools/subagent.py`)
+- **Free-form (LLM-decided)** — the main agent calls `Agent` (`tools/subagent.py`)
   when it judges delegation is warranted. Subagent type, prompt, and timing are
   all chosen by the model.
 - **Single-fire (encoded)** — `core/scheduler.py` triggers one `AgentDefinition`
@@ -31,7 +31,7 @@ recipe in YAML, run by a thin orchestrator.
 | Decision | Current state | Gap |
 |---|---|---|
 | Context passing between agents | Summary-only. `on_tool_start` clears `output_parts` so only post-last-tool text reaches the parent. Capped at 10k chars. | No structured handoff (JSON schema in/out). |
-| Depth limit | Hard cap at 2 — `Task` is in `EXCLUDED_TOOLS` so subagents can't recurse. | No per-agent override for legitimate 3-deep cases. |
+| Depth limit | Hard cap at 2 — `Agent` is in `EXCLUDED_TOOLS` so subagents can't recurse. | No per-agent override for legitimate 3-deep cases. |
 | Termination | Per-call `max_turns` (default 20), `timeout` (300s), token tracking. | No parent-level *total* budget across children. |
 
 Primitives are solid. The missing piece is the encode-vs-decide layer.
@@ -64,7 +64,7 @@ Traps:
 
 ## Four chaining patterns worth supporting
 
-1. **Delegation (parent → named child)** — Claude Code's `Task` tool. Parent
+1. **Delegation (parent → named child)** — Claude Code's `Agent` tool (formerly `Task`). Parent
    says "do X, report back." Child runs its own loop, returns a summary.
    Already supported. Use when: protect parent context from noise, or subtask
    has its own tool set.
@@ -121,7 +121,7 @@ Properties:
 
 - New `core/playbook.py` — loads YAML, walks steps, calls `run_agent_once` per
   step, threads outputs through a context dict.
-- New tool `RunPlaybook` next to `Task` in `tools/subagent.py` — the main
+- New tool `RunPlaybook` next to `Agent` in `tools/subagent.py` — the main
   agent can invoke a playbook the same way it invokes a subagent.
 - Schedule rows already reference an agent name; add `playbook_name` as a
   sibling column and the cron path gets playbooks for free.
@@ -138,7 +138,7 @@ pattern, write it down, refine when it breaks. Exploration → exploitation.
 
 ### What gets captured from a run
 
-The LLM's trajectory is already a DAG — Task calls, tool calls, branches.
+The LLM's trajectory is already a DAG — Agent calls, tool calls, branches.
 Most ingredients exist:
 - `AgentRun` rows (`core/db_models.py`)
 - `parent_session_id` threading (`core/agent_runner.py:148`)
@@ -195,7 +195,7 @@ baked in.
 3. **Playbook engine**: `core/playbook.py` — YAML loader + step executor. Threads
    `{{previous}}`, `{{steps.*.result}}`, `{{input.*}}` through a context dict.
    Honours `when:` conditions.
-4. **RunPlaybook tool**: register alongside `Task` in `tools/subagent.py`.
+4. **RunPlaybook tool**: register alongside `Agent` in `tools/subagent.py`.
 5. **Schedule integration**: `playbook_name` column on Schedule, dispatch path
    in `core/scheduler.py`.
 6. **Promotion endpoint**: `POST /api/runs/{id}/propose-playbook` with the

@@ -19,6 +19,28 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        database:
+          - name: sqlite
+            url: "sqlite+aiosqlite:///./data/test.db"
+          - name: postgres
+            url: "postgresql+asyncpg://lightcc:lightcc@localhost:5432/lightcc"
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: lightcc
+          POSTGRES_PASSWORD: lightcc
+          POSTGRES_DB: lightcc
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U lightcc"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -26,10 +48,55 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -r requirements.txt
-      - run: python -m pytest tests/ --tb=short -q
+      - name: Run tests with coverage (${{ matrix.database.name }})
+        run: |
+          mkdir -p data
+          python -m pytest tests/ \
+            --cov=core --cov=routes --cov=handlers \
+            --cov-report=term-missing \
+            --cov-fail-under=40 \
+            --ignore=tests/test_subagent.py \
+            --tb=short -q
         env:
           ANTHROPIC_API_KEY: "sk-test-not-real"
-          JWT_SECRET: "ci-test-secret"
+          JWT_SECRET: "ci-test-secret-at-least-32-chars-long-xxxxx"
+          ENV: "development"
+          DATABASE_URL: ${{ matrix.database.url }}
+
+  migrations:
+    name: Migration reversibility
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: lightcc
+          POSTGRES_PASSWORD: lightcc
+          POSTGRES_DB: lightcc
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U lightcc"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Upgrade to head, downgrade to base, upgrade back
+        run: |
+          alembic upgrade head
+          alembic downgrade base
+          alembic upgrade head
+        env:
+          ANTHROPIC_API_KEY: "sk-test-not-real"
+          JWT_SECRET: "ci-test-secret-at-least-32-chars-long-xxxxx"
+          ENV: "development"
+          DATABASE_URL: "postgresql+asyncpg://lightcc:lightcc@localhost:5432/lightcc"
 
   frontend:
     runs-on: ubuntu-latest

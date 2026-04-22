@@ -36,8 +36,8 @@ from core.session import (
     sync_session_to_redis,
 )
 from core.telemetry import session_closed, session_opened
-from commands.registry import list_commands
 from handlers.agent_handler import generate_title, handle_user_message, summarize_messages
+from handlers.commands import list_agents_for_client
 from handlers.media import rebuild_render_messages
 from skills.registry import list_skills
 
@@ -51,13 +51,22 @@ async def websocket_endpoint(
     outputs_dir,
 ) -> None:
     """Main WebSocket handler -- authenticates, dispatches events, cleans up."""
-    # Origin validation
+    # Origin validation. In prod the Settings validator guarantees '*' is absent
+    # and allowed_origins is a concrete list; we also require the Origin header
+    # to be present so a missing-header bypass isn't possible.
+    import os as _os
+    _env = _os.environ.get("ENV", "development").lower()
     allowed_origins = settings.server.allowed_origins
+    origin = ws.headers.get("origin", "")
     if "*" not in allowed_origins:
-        origin = ws.headers.get("origin", "")
-        if origin and origin not in allowed_origins:
-            await ws.close(code=4003, reason="Origin not allowed")
-            return
+        if _env in ("production", "prod"):
+            if not origin or origin not in allowed_origins:
+                await ws.close(code=4003, reason="Origin not allowed")
+                return
+        else:
+            if origin and origin not in allowed_origins:
+                await ws.close(code=4003, reason="Origin not allowed")
+                return
 
     # Rate limit connections per IP before accepting
     client_ip = ws.client.host if ws.client else "unknown"
@@ -91,14 +100,11 @@ async def websocket_endpoint(
             user_id = payload["sub"]
             user_email = payload.get("email", "")
             user_is_admin = False
-            db = await get_db()
-            try:
+            async with get_db() as db:
                 user = await get_user_by_id(db, user_id)
                 if user:
                     user_display_name = user.display_name
                     user_is_admin = user.is_admin
-            finally:
-                await db.close()
         else:
             await ws.close(code=4001, reason="Invalid or expired token")
             return
@@ -159,23 +165,26 @@ async def websocket_endpoint(
     set_task_notify_callback(task_notify, session_id=session_id)
 
     # ── Send connected event ──
+    # Legacy commands now share the unified skills registry, so a single
+    # ``list_skills()`` covers both.
     skills_for_client = [
         {"name": s.name, "description": s.description, "argument_hint": s.argument_hint}
         for s in list_skills() if s.user_invocable
     ] + [
-        {"name": c.name, "description": c.description, "argument_hint": c.argument_hint}
-        for c in list_commands()
-    ] + [
+        {"name": "agents", "description": "List, enable, disable, or show your agents", "argument_hint": "list|show|enable|disable <name>"},
+        {"name": "skills", "description": "List, enable, disable, show, or create skills", "argument_hint": "list|show|enable|disable|create <name>"},
         {"name": "context", "description": "Show context window usage breakdown", "argument_hint": ""},
         {"name": "plugin", "description": "Install, list, update, or uninstall plugins", "argument_hint": "install|list|update|uninstall <name-or-url>"},
         {"name": "schedule", "description": "Create, list, enable, disable, or delete scheduled agent tasks", "argument_hint": "create|list|enable|disable|delete|runs|run"},
         {"name": "reload", "description": "Reload all skills, commands, and project config from disk", "argument_hint": ""},
     ]
+    agents_for_client = await list_agents_for_client(user_id)
     await send_event("connected", {
         "session_id": session_id,
         "model": settings.model,
         "available_models": settings.available_models,
         "skills": skills_for_client,
+        "agents": agents_for_client,
         "suggestions": settings.suggestions,
         "user": {
             "id": user_id,
@@ -291,16 +300,13 @@ async def websocket_endpoint(
         try:
             from core.db_models import Conversation as ConvModel
             from sqlalchemy import select as sql_select
-            db = await get_db()
-            try:
+            async with get_db() as db:
                 owner_row = (await db.execute(
                     sql_select(ConvModel.id, ConvModel.model).where(
                         ConvModel.id == conv_id,
                         ConvModel.user_id == user_id,
                     )
                 )).first()
-            finally:
-                await db.close()
             if owner_row is None:
                 await send_event("error", {"message": "Conversation not found"}, cid=cid)
                 return
@@ -408,14 +414,11 @@ async def websocket_endpoint(
             if title and conv_id:
                 from core.db_models import Conversation
                 from sqlalchemy import update as sql_update
-                db = await get_db()
-                try:
+                async with get_db() as db:
                     await db.execute(
                         sql_update(Conversation).where(Conversation.id == conv_id).values(title=title)
                     )
                     await db.commit()
-                finally:
-                    await db.close()
             await send_event("title_updated", {"conversation_id": conv_id or "", "title": title or ""}, cid=cid)
 
     async def _handle_summarize_context(cid: str | None) -> None:

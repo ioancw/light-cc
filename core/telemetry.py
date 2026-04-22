@@ -269,8 +269,7 @@ def _write_audit_event_bg(
         try:
             from core.database import get_db
             from core.db_models import AuditEvent
-            db = await get_db()
-            try:
+            async with get_db() as db:
                 event = AuditEvent(
                     user_id=user_id,
                     tool_name=tool_name,
@@ -281,8 +280,6 @@ def _write_audit_event_bg(
                 )
                 db.add(event)
                 await db.commit()
-            finally:
-                await db.close()
         except Exception as e:
             logger.debug(f"Audit event DB write failed: {e}")
 

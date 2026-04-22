@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+from contextlib import asynccontextmanager
+from typing import AsyncIterator
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -46,9 +48,19 @@ async def init_db() -> None:
         logger.info("Database engine ready (use 'alembic upgrade head' for migrations): %s", settings.database_url)
 
 
-async def get_db() -> AsyncSession:
-    """Return a new async session. Caller must close it."""
-    return _session_factory()
+@asynccontextmanager
+async def get_db() -> AsyncIterator[AsyncSession]:
+    """Yield an async session, closing it on exit.
+
+    Usage:
+        async with get_db() as db:
+            ...
+    """
+    session = _session_factory()
+    try:
+        yield session
+    finally:
+        await session.close()
 
 
 async def shutdown_db() -> None:

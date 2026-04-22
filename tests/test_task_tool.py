@@ -1,4 +1,5 @@
-"""Tests for the ``Task`` tool -- CC-compliant in-conversation subagent delegation.
+"""Tests for the ``Agent`` tool (canonical) / ``Task`` (alias) -- CC-compliant
+in-conversation subagent delegation.
 
 Companion to test_subagent.py (which covers builtin AgentType resolution and the
 lower-level run_subagent helper). This file focuses on the production hot path:
@@ -14,6 +15,7 @@ The first path produces an AgentRun row for audit; the second does not.
 from __future__ import annotations
 
 import json
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -43,8 +45,9 @@ def _clean_subagent_state():
 
 @pytest_asyncio.fixture
 async def task_db(test_db, test_user):
+    @asynccontextmanager
     async def _get_test_db():
-        return test_db
+        yield test_db
 
     with patch("core.agent_crud.get_db", side_effect=_get_test_db), \
          patch("core.database.get_db", side_effect=_get_test_db), \
@@ -52,25 +55,25 @@ async def task_db(test_db, test_user):
         yield test_db, test_user
 
 
-class TestTaskToolSchema:
-    def test_task_tool_is_registered(self):
+class TestAgentToolSchema:
+    def test_agent_tool_is_registered(self):
         from tools.registry import get_tool_schemas
-        schemas = get_tool_schemas(["Task"])
+        schemas = get_tool_schemas(["Agent"])
         assert len(schemas) == 1
-        assert schemas[0]["name"] == "Task"
+        assert schemas[0]["name"] == "Agent"
 
-    def test_task_tool_required_fields(self):
+    def test_agent_tool_required_fields(self):
         from tools.registry import get_tool_schemas
-        schema = get_tool_schemas(["Task"])[0]["input_schema"]
+        schema = get_tool_schemas(["Agent"])[0]["input_schema"]
         required = set(schema["required"])
         assert {"subagent_type", "prompt", "description"} <= required
 
-    def test_aliases_resolve_to_task(self):
+    def test_aliases_resolve_to_agent(self):
         from tools.registry import get_tool_schemas
-        for alias in ("Agent", "subagent", "BackgroundAgent", "background_agent"):
+        for alias in ("Task", "subagent", "BackgroundAgent", "background_agent"):
             schemas = get_tool_schemas([alias])
             assert len(schemas) == 1
-            assert schemas[0]["name"] == "Task"
+            assert schemas[0]["name"] == "Agent"
 
 
 class TestTaskToolBuiltinPath:
@@ -144,11 +147,11 @@ class TestTaskToolAgentDefinitionPath:
         assert runs[0].conversation_id is None  # persist_conversation=False
 
     @pytest.mark.asyncio
-    async def test_user_agent_shadows_builtin_via_task(
+    async def test_user_agent_shadows_builtin_via_agent(
         self, mock_anthropic_client, _clean_subagent_state, task_db,
     ):
-        """If a user names their agent ``researcher``, Task should dispatch
-        to the user's definition, not the builtin researcher."""
+        """If a user names their agent ``researcher``, the Agent tool should
+        dispatch to the user's definition, not the builtin researcher."""
         from core.agent_crud import create_agent
         from core.db_models import AgentRun
         from core.session import create_connection, set_current_session, destroy_connection
@@ -186,16 +189,16 @@ class TestTaskToolAgentDefinitionPath:
         assert len(runs) == 1
 
 
-class TestTaskToolExcludesSelf:
-    def test_task_is_in_excluded_tools(self):
+class TestAgentToolExcludesSelf:
+    def test_agent_is_in_excluded_tools(self):
         from core.agent_types import EXCLUDED_TOOLS
-        assert "Task" in EXCLUDED_TOOLS
-        # The original aliases must also remain excluded for defence in depth.
         assert "Agent" in EXCLUDED_TOOLS
+        # Aliases must also remain excluded for defence in depth.
+        assert "Task" in EXCLUDED_TOOLS
         assert "subagent" in EXCLUDED_TOOLS
 
 
-class TestTaskToolUnknown:
+class TestAgentToolUnknown:
     @pytest.mark.asyncio
     async def test_unknown_subagent_type_reports_error(self, _clean_subagent_state):
         from tools.subagent import handle_task

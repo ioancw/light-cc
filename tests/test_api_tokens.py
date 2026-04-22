@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
@@ -30,8 +31,9 @@ from routes.auth import get_current_user
 
 @pytest_asyncio.fixture
 async def tokens_db(test_db: AsyncSession, test_user):
+    @asynccontextmanager
     async def _get_test_db():
-        return test_db
+        yield test_db
 
     with patch("core.api_tokens.get_db", side_effect=_get_test_db):
         yield test_db, test_user
@@ -188,8 +190,9 @@ class TestVerifyApiToken:
 
 @pytest_asyncio.fixture
 async def tokens_api_client(test_db: AsyncSession, test_user):
+    @asynccontextmanager
     async def _get_test_db():
-        return test_db
+        yield test_db
 
     app = FastAPI()
     app.include_router(api_tokens_router)
@@ -279,8 +282,9 @@ async def auth_test_app(test_db: AsyncSession, test_user):
     from fastapi import Depends
     from core.db_models import User as UserModel
 
+    @asynccontextmanager
     async def _get_test_db():
-        return test_db
+        yield test_db
 
     app = FastAPI()
 

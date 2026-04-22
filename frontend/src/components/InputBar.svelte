@@ -1,16 +1,18 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
-  import { appState, getStreamingMessage, currentConversation, isCurrentStreaming, showToast, viewport } from '../state.svelte.js';
+  import { appState, getStreamingMessage, currentConversation, isCurrentStreaming, isConversationLoading, showToast, viewport } from '../state.svelte.js';
   import { send } from '../ws.js';
   import { uploadFile } from '../api.js';
 
   let text = $state('');
   let textareaEl = $state(null);
 
-  // Autocomplete state
+  // Autocomplete state. ``acKind`` is "skill" (slash) or "agent" (@) -- both
+  // share the same dropdown geometry, but selection inserts a different token.
   let acVisible = $state(false);
   let acMatches = $state([]);
   let acIndex = $state(0);
+  let acKind = $state('skill');
 
   // Drag-drop state
   let dragOver = $state(false);
@@ -24,14 +26,57 @@
   }
 
   function updateAutocomplete() {
+    if (!textareaEl) { hideAutocomplete(); return; }
+
+    const cursorPos = textareaEl.selectionStart;
+    const textBefore = text.substring(0, cursorPos);
+
+    // ── @-token picker (agents) ──
+    // Active when the *current* token (no spaces since the last @) starts
+    // with @. Matches the backend regex `@agent-<name>` -- after the user
+    // commits a name with space, the picker hides until the next @.
+    const lastAt = textBefore.lastIndexOf('@');
+    const lastSpace = textBefore.lastIndexOf(' ');
+    const lastNewline = textBefore.lastIndexOf('\n');
+    const lastBreak = Math.max(lastSpace, lastNewline);
+    if (lastAt > lastBreak && lastAt >= 0) {
+      const tokenStart = lastAt;
+      // Allow @, @agent-, @agent-foo -- everything up to the cursor.
+      const tokenAfterAt = textBefore.substring(tokenStart + 1);
+      // Only the first @ on a line, or an @ following whitespace, opens the
+      // picker -- stops "ioan@example.com"-style emails from triggering.
+      const charBeforeAt = tokenStart === 0 ? ' ' : textBefore[tokenStart - 1];
+      if (/\s/.test(charBeforeAt) || tokenStart === 0) {
+        // Strip optional ``agent-`` prefix the user may type to match the
+        // exact dispatch token they'd insert manually.
+        let query = tokenAfterAt.toLowerCase();
+        if (query.startsWith('agent-')) query = query.substring(6);
+
+        const agents = appState.agents || [];
+        if (agents.length === 0) { hideAutocomplete(); return; }
+        // Substring match on name OR description -- name first, then desc.
+        const nameHits = agents.filter(a => a.name.toLowerCase().includes(query));
+        const seen = new Set(nameHits.map(a => a.name));
+        const descHits = agents.filter(
+          a => !seen.has(a.name) && (a.description || '').toLowerCase().includes(query)
+        );
+        const matches = [...nameHits, ...descHits];
+        if (matches.length === 0) { hideAutocomplete(); return; }
+
+        acKind = 'agent';
+        acMatches = matches;
+        acIndex = 0;
+        acVisible = true;
+        return;
+      }
+    }
+
+    // ── /-token picker (skills) ──
     const allSkills = appState.skills || [];
     // Deduplicate by name (skills + commands can overlap)
     const seen = new Set();
     const skills = allSkills.filter(s => { if (seen.has(s.name)) return false; seen.add(s.name); return true; });
-    if (!textareaEl || skills.length === 0) { hideAutocomplete(); return; }
-
-    const cursorPos = textareaEl.selectionStart;
-    const textBefore = text.substring(0, cursorPos);
+    if (skills.length === 0) { hideAutocomplete(); return; }
 
     if (!textBefore.startsWith('/') || textBefore.includes(' ')) {
       hideAutocomplete();
@@ -43,6 +88,7 @@
 
     if (matches.length === 0) { hideAutocomplete(); return; }
 
+    acKind = 'skill';
     acMatches = matches;
     acIndex = 0;
     acVisible = true;
@@ -55,9 +101,28 @@
   }
 
   function selectAutocomplete(name) {
-    text = '/' + name + ' ';
+    if (acKind === 'agent') {
+      // Replace just the in-progress @-token, preserving anything after the
+      // cursor (matters when the user re-edits a previous message).
+      const cursorPos = textareaEl ? textareaEl.selectionStart : text.length;
+      const before = text.substring(0, cursorPos);
+      const after = text.substring(cursorPos);
+      const lastAt = before.lastIndexOf('@');
+      const replaced = before.substring(0, lastAt) + '@agent-' + name + ' ';
+      text = replaced + after;
+      // Position cursor right after the inserted space so typing continues
+      // the prompt, not the token.
+      requestAnimationFrame(() => {
+        if (!textareaEl) return;
+        const pos = replaced.length;
+        textareaEl.focus();
+        textareaEl.setSelectionRange(pos, pos);
+      });
+    } else {
+      text = '/' + name + ' ';
+      if (textareaEl) textareaEl.focus();
+    }
     hideAutocomplete();
-    if (textareaEl) textareaEl.focus();
   }
 
   function handleKeydown(e) {
@@ -114,6 +179,7 @@
   function sendMessage() {
     if (isCurrentStreaming()) return;
     if (!appState.connected) return;
+    if (isConversationLoading(appState.currentId)) return;
 
     const trimmed = text.trim();
     if (!trimmed) return;
@@ -235,21 +301,23 @@
     ondragenter={onDragEnter} ondragover={onDragOver} ondragleave={onDragLeave} ondrop={onDrop} role="group">
     {#if acVisible && acMatches.length > 0}
       <div class="autocomplete-dropdown">
-        {#each acMatches as skill, i (skill.name)}
+        {#each acMatches as item, i (item.name)}
           <button
             class="autocomplete-item"
             class:active={i === acIndex}
-            onmousedown={() => selectAutocomplete(skill.name)}
+            onmousedown={() => selectAutocomplete(item.name)}
             type="button"
           >
             <div class="autocomplete-top">
-              <span class="autocomplete-name">/{skill.name}</span>
-              {#if skill.argument_hint}
-                <span class="autocomplete-hint">{skill.argument_hint}</span>
+              <span class="autocomplete-name">{acKind === 'agent' ? '@agent-' : '/'}{item.name}</span>
+              {#if acKind === 'skill' && item.argument_hint}
+                <span class="autocomplete-hint">{item.argument_hint}</span>
+              {:else if acKind === 'agent' && item.source && item.source !== 'user'}
+                <span class="autocomplete-hint">{item.source}</span>
               {/if}
             </div>
-            {#if skill.description}
-              <div class="autocomplete-desc">{skill.description}</div>
+            {#if item.description}
+              <div class="autocomplete-desc">{item.description}</div>
             {/if}
           </button>
         {/each}
@@ -298,7 +366,7 @@
             </svg>
           </button>
         {:else}
-          <button class="send-btn" onclick={sendMessage} disabled={!text.trim() || !appState.connected} title="Send message">
+          <button class="send-btn" onclick={sendMessage} disabled={!text.trim() || !appState.connected || isConversationLoading(appState.currentId)} title="Send message">
             <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
               <path d="M1 11L11 6 1 1v4l7 1-7 1v4z" fill="currentColor"/>
             </svg>

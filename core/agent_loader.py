@@ -16,7 +16,7 @@ Frontmatter schema:
 
     You are a ... agent. ...
 
-Agents are callable via the ``Task`` tool (in-conversation) or the
+Agents are callable via the ``Agent`` tool (in-conversation) or the
 ``POST /api/agents/run`` endpoint (headless). Scheduling lives in
 ``Schedule`` rows, separate from the agent definition -- if you want a
 daily firing, create a Schedule with prompt ``/agent-name``.
@@ -170,8 +170,7 @@ async def sync_agent_defs_to_db(
         return 0
 
     synced = 0
-    session = await get_db()
-    try:
+    async with get_db() as session:
         for d in defs:
             stmt = select(AgentDefinition).where(
                 AgentDefinition.user_id == owner_user_id,
@@ -221,8 +220,6 @@ async def sync_agent_defs_to_db(
             synced += 1
 
         await session.commit()
-    finally:
-        await session.close()
 
     logger.info(
         f"Synced {synced} agent(s) to DB for user {owner_user_id} (source={source_label})"
@@ -234,3 +231,98 @@ async def sync_agents_to_db(agents_dir: str | Path, owner_user_id: str) -> int:
     """Sync YAML-defined agents from a directory to the DB as source='yaml'."""
     defs = discover_agents(agents_dir)
     return await sync_agent_defs_to_db(defs, owner_user_id, source_label="yaml")
+
+
+# Frontmatter key emit order. Keeping this stable matters for diff hygiene
+# when the wizard re-writes a file (e.g. on overwrite). The list mirrors
+# the AGENT.md schema documented at the top of this module plus CC pass-
+# through extras (permissionMode, isolation, background, etc.).
+_AGENT_FRONTMATTER_KEY_ORDER = (
+    "name",
+    "description",
+    "model",
+    "tools",
+    "disallowedTools",
+    "skills",
+    "mcpServers",
+    "permissionMode",
+    "isolation",
+    "background",
+    "initialPrompt",
+    "color",
+    "max-turns",
+    "timeout",
+    "memory-scope",
+    "enabled",
+)
+
+
+def write_agent_def(
+    def_: AgentDef,
+    agents_dir: str | Path,
+    *,
+    overwrite: bool = False,
+    extra_frontmatter: dict[str, Any] | None = None,
+) -> Path:
+    """Serialize an AgentDef to ``agents/<name>/AGENT.md``.
+
+    ``extra_frontmatter`` is the catch-all for CC pass-through fields the
+    wizard collects but the runner doesn't honour yet (e.g.
+    ``permissionMode``, ``isolation``, ``background``, ``disallowedTools``,
+    ``mcpServers``, ``initialPrompt``, ``color``). They're written verbatim
+    so AGENT.md files stay forward-compatible with CC and with future Light
+    CC work, per the W1 plan note.
+
+    Refuses to overwrite an existing file unless ``overwrite=True`` so the
+    wizard can prompt before stomping. Returns the absolute path written.
+    """
+    root = Path(agents_dir)
+    target_dir = root / def_.name
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = target_dir / "AGENT.md"
+
+    if target.exists() and not overwrite:
+        raise FileExistsError(
+            f"AGENT.md already exists at {target}. Pass overwrite=True to replace."
+        )
+
+    raw: dict[str, Any] = {
+        "name": def_.name,
+        "description": def_.description,
+    }
+    if def_.model:
+        raw["model"] = def_.model
+    if def_.tools is not None:
+        raw["tools"] = list(def_.tools)
+    if def_.skills is not None:
+        raw["skills"] = list(def_.skills)
+    # Defaults are persisted only when they actually diverge from the
+    # AgentDef defaults -- otherwise the file gets noisy with redundant
+    # ``max-turns: 20`` lines.
+    if def_.max_turns != 20:
+        raw["max-turns"] = def_.max_turns
+    if def_.timeout_seconds != 300:
+        raw["timeout"] = def_.timeout_seconds
+    if def_.memory_scope != "user":
+        raw["memory-scope"] = def_.memory_scope
+    if def_.enabled is False:
+        raw["enabled"] = False
+
+    if extra_frontmatter:
+        for k, v in extra_frontmatter.items():
+            if v in (None, "", [], {}):
+                continue  # don't emit empty pass-through fields
+            raw[k] = v
+
+    ordered: dict[str, Any] = {}
+    for k in _AGENT_FRONTMATTER_KEY_ORDER:
+        if k in raw:
+            ordered[k] = raw.pop(k)
+    ordered.update(sorted(raw.items()))
+
+    fm = yaml.safe_dump(
+        ordered, sort_keys=False, default_flow_style=False, allow_unicode=True
+    ).rstrip()
+    body = (def_.system_prompt or "").rstrip()
+    target.write_text(f"---\n{fm}\n---\n\n{body}\n", encoding="utf-8")
+    return target

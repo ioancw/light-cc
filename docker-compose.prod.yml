@@ -11,6 +11,19 @@ services:
     ports: !reset []
     expose:
       - "8000"
+    # Runtime hardening: non-root user comes from Dockerfile. Here we drop
+    # every capability, block privilege escalation, and lock the root FS
+    # read-only. The only writable paths are the mounted volumes below
+    # and the /tmp tmpfs.
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+    volumes:
+      - app-plugins:/app/plugins
 
   caddy:
     image: caddy:2-alpine
@@ -40,7 +53,7 @@ services:
       PGHOST: postgres
       PGUSER: lightcc
       PGDATABASE: lightcc
-      PGPASSWORD: "${POSTGRES_PASSWORD:-lightcc}"
+      PGPASSWORD: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}"
       RETENTION_DAYS: "${BACKUP_RETENTION_DAYS:-14}"
     volumes:
       - ./backups:/backups
@@ -70,3 +83,4 @@ services:
 volumes:
   caddy-data:
   caddy-config:
+  app-plugins:

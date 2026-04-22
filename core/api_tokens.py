@@ -66,36 +66,29 @@ async def create_api_token(
         expires_at=expires_at,
     )
 
-    db = await get_db()
-    try:
+    async with get_db() as db:
         db.add(row)
         await db.commit()
         await db.refresh(row)
-    finally:
-        await db.close()
 
     return row, plaintext
 
 
 async def list_api_tokens(user_id: str) -> list[ApiToken]:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         result = await db.execute(
             select(ApiToken)
             .where(ApiToken.user_id == user_id)
             .order_by(ApiToken.created_at.desc()),
         )
         return list(result.scalars().all())
-    finally:
-        await db.close()
 
 
 async def revoke_api_token(user_id: str, token_id: str) -> bool:
     """Mark a token revoked. Returns True if a matching, not-yet-revoked
     token was found and revoked; False otherwise (wrong user, unknown id,
     or already revoked)."""
-    db = await get_db()
-    try:
+    async with get_db() as db:
         result = await db.execute(
             select(ApiToken).where(
                 ApiToken.id == token_id,
@@ -108,8 +101,6 @@ async def revoke_api_token(user_id: str, token_id: str) -> bool:
         row.revoked_at = datetime.now(timezone.utc)
         await db.commit()
         return True
-    finally:
-        await db.close()
 
 
 async def verify_api_token(plaintext: str) -> Optional[User]:
@@ -127,8 +118,7 @@ async def verify_api_token(plaintext: str) -> Optional[User]:
     # on the prefix check.
     token_hash = _hash_token(plaintext)
 
-    db = await get_db()
-    try:
+    async with get_db() as db:
         result = await db.execute(
             select(ApiToken).where(ApiToken.token_hash == token_hash),
         )
@@ -160,5 +150,3 @@ async def verify_api_token(plaintext: str) -> Optional[User]:
 
         await db.commit()
         return user
-    finally:
-        await db.close()

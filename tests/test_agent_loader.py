@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from pathlib import Path
 from unittest.mock import patch
 
@@ -262,8 +263,9 @@ body
 async def loader_db(test_db: AsyncSession, test_user):
     """Patch get_db in agent_loader to use the test session."""
 
+    @asynccontextmanager
     async def _get_test_db():
-        return test_db
+        yield test_db
 
     with patch("core.database.get_db", side_effect=_get_test_db):
         yield test_db, test_user
@@ -329,8 +331,9 @@ Version 2 prompt.
         # Pre-create a user-owned row with the same name
         from core.agent_crud import create_agent
 
+        @asynccontextmanager
         async def _get_test_db():
-            return db
+            yield db
 
         with patch("core.agent_crud.get_db", side_effect=_get_test_db):
             await create_agent(

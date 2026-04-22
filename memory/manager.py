@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from datetime import date
 from pathlib import Path
@@ -58,13 +59,31 @@ def ensure_user_dirs(user_id: str) -> None:
 
 # ── DB-backed operations ────────────────────────────────────────────────
 
+@asynccontextmanager
 async def _get_db():
-    """Get a database session. Returns None if DB is not available."""
+    """Yield a database session, or None if DB is not available.
+
+    Wraps ``core.database.get_db`` so callers can use ``async with _get_db() as db:``
+    and fall back to file-based storage when ``db is None``.
+    """
     try:
         from core.database import get_db
-        return await get_db()
+        cm = get_db()
     except Exception:
-        return None
+        yield None
+        return
+    try:
+        session = await cm.__aenter__()
+    except Exception:
+        yield None
+        return
+    try:
+        yield session
+    finally:
+        try:
+            await cm.__aexit__(None, None, None)
+        except Exception:
+            pass
 
 
 async def load_memory(user_id: str) -> str:
@@ -73,34 +92,29 @@ async def load_memory(user_id: str) -> str:
     Returns a listing of available memory entries so the model knows
     what's available. Individual entries can be read via ReadMemory.
     """
-    db = await _get_db()
-    if db:
-        try:
-            from core.db_models import Memory
-            from sqlalchemy import select
-            result = await db.execute(
-                select(Memory)
-                .where(Memory.user_id == user_id)
-                .order_by(Memory.created_at)
-            )
-            rows = list(result.scalars().all())
-            await db.close()
-            if not rows:
-                return ""
-            lines = []
-            for m in rows:
-                tags = m.tags_list
-                tag_str = f", tags: {', '.join(tags)}" if tags else ""
-                lines.append(
-                    f"- **{m.title}** (`{m.id}`, type: {m.memory_type}{tag_str})"
-                )
-            return "Available memories (use ReadMemory to view full content):\n" + "\n".join(lines)
-        except Exception as e:
-            logger.debug(f"DB load_memory failed, falling back to files: {e}")
+    async with _get_db() as db:
+        if db:
             try:
-                await db.close()
-            except Exception:
-                pass
+                from core.db_models import Memory
+                from sqlalchemy import select
+                result = await db.execute(
+                    select(Memory)
+                    .where(Memory.user_id == user_id)
+                    .order_by(Memory.created_at)
+                )
+                rows = list(result.scalars().all())
+                if not rows:
+                    return ""
+                lines = []
+                for m in rows:
+                    tags = m.tags_list
+                    tag_str = f", tags: {', '.join(tags)}" if tags else ""
+                    lines.append(
+                        f"- **{m.title}** (`{m.id}`, type: {m.memory_type}{tag_str})"
+                    )
+                return "Available memories (use ReadMemory to view full content):\n" + "\n".join(lines)
+            except Exception as e:
+                logger.debug(f"DB load_memory failed, falling back to files: {e}")
 
     # File-based fallback
     return _load_memory_files(user_id)
@@ -148,31 +162,25 @@ async def save_memory(
         source = "user"
     clean_tags = [t.strip() for t in (tags or []) if t and t.strip()]
 
-    db = await _get_db()
-    if db:
-        try:
-            from core.db_models import Memory
-            mem = Memory(
-                user_id=user_id,
-                title=title,
-                content=content,
-                memory_type=memory_type,
-                tags=json.dumps(clean_tags) if clean_tags else None,
-                source=source,
-                source_conversation_id=source_conversation_id,
-            )
-            db.add(mem)
-            await db.commit()
-            await db.refresh(mem)
-            mem_id = mem.id
-            await db.close()
-            return mem_id
-        except Exception as e:
-            logger.debug(f"DB save_memory failed, falling back to files: {e}")
+    async with _get_db() as db:
+        if db:
             try:
-                await db.close()
-            except Exception:
-                pass
+                from core.db_models import Memory
+                mem = Memory(
+                    user_id=user_id,
+                    title=title,
+                    content=content,
+                    memory_type=memory_type,
+                    tags=json.dumps(clean_tags) if clean_tags else None,
+                    source=source,
+                    source_conversation_id=source_conversation_id,
+                )
+                db.add(mem)
+                await db.commit()
+                await db.refresh(mem)
+                return mem.id
+            except Exception as e:
+                logger.debug(f"DB save_memory failed, falling back to files: {e}")
 
     # File-based fallback (ignores tags/type — DB is the primary path)
     return _save_memory_file(user_id, title, content)
@@ -202,27 +210,20 @@ async def read_memory(user_id: str, identifier: str) -> str | None:
     if ".." in identifier or "/" in identifier or "\\" in identifier:
         return None
 
-    db = await _get_db()
-    if db:
-        try:
-            from core.db_models import Memory
-            from sqlalchemy import select
-            # Try by ID first
-            result = await db.execute(
-                select(Memory).where(Memory.id == identifier, Memory.user_id == user_id)
-            )
-            mem = result.scalar_one_or_none()
-            if mem:
-                content = mem.content
-                await db.close()
-                return content
-            await db.close()
-        except Exception as e:
-            logger.debug(f"DB read_memory failed, falling back to files: {e}")
+    async with _get_db() as db:
+        if db:
             try:
-                await db.close()
-            except Exception:
-                pass
+                from core.db_models import Memory
+                from sqlalchemy import select
+                # Try by ID first
+                result = await db.execute(
+                    select(Memory).where(Memory.id == identifier, Memory.user_id == user_id)
+                )
+                mem = result.scalar_one_or_none()
+                if mem:
+                    return mem.content
+            except Exception as e:
+                logger.debug(f"DB read_memory failed, falling back to files: {e}")
 
     # File-based fallback
     ensure_user_dirs(user_id)
@@ -245,50 +246,45 @@ async def search_memory(
     When ``memory_type`` is provided, only rows of that type are returned.
     An empty ``query`` with non-empty filters returns all matching rows.
     """
-    db = await _get_db()
-    if db:
-        try:
-            from core.db_models import Memory
-            from sqlalchemy import select, or_, and_
-            conds = [Memory.user_id == user_id]
-            if query:
-                query_pattern = f"%{query}%"
-                conds.append(or_(
-                    Memory.title.ilike(query_pattern),
-                    Memory.content.ilike(query_pattern),
-                ))
-            if memory_type:
-                conds.append(Memory.memory_type == memory_type)
-            result = await db.execute(
-                select(Memory).where(and_(*conds)).order_by(Memory.created_at)
-            )
-            rows = list(result.scalars().all())
-            await db.close()
-
-            # Tag filtering is done in Python because `tags` is a JSON string
-            # column — doing a proper tag query would require a side table.
-            if tags:
-                want = set(tags)
-                rows = [m for m in rows if want.issubset(set(m.tags_list))]
-
-            return [
-                {
-                    "id": m.id,
-                    "title": m.title,
-                    "content": m.content,
-                    "type": m.memory_type,
-                    "tags": m.tags_list,
-                    "source": m.source,
-                    "source_conversation_id": m.source_conversation_id,
-                }
-                for m in rows
-            ]
-        except Exception as e:
-            logger.debug(f"DB search_memory failed, falling back to files: {e}")
+    async with _get_db() as db:
+        if db:
             try:
-                await db.close()
-            except Exception:
-                pass
+                from core.db_models import Memory
+                from sqlalchemy import select, or_, and_
+                conds = [Memory.user_id == user_id]
+                if query:
+                    query_pattern = f"%{query}%"
+                    conds.append(or_(
+                        Memory.title.ilike(query_pattern),
+                        Memory.content.ilike(query_pattern),
+                    ))
+                if memory_type:
+                    conds.append(Memory.memory_type == memory_type)
+                result = await db.execute(
+                    select(Memory).where(and_(*conds)).order_by(Memory.created_at)
+                )
+                rows = list(result.scalars().all())
+
+                # Tag filtering is done in Python because `tags` is a JSON string
+                # column — doing a proper tag query would require a side table.
+                if tags:
+                    want = set(tags)
+                    rows = [m for m in rows if want.issubset(set(m.tags_list))]
+
+                return [
+                    {
+                        "id": m.id,
+                        "title": m.title,
+                        "content": m.content,
+                        "type": m.memory_type,
+                        "tags": m.tags_list,
+                        "source": m.source,
+                        "source_conversation_id": m.source_conversation_id,
+                    }
+                    for m in rows
+                ]
+            except Exception as e:
+                logger.debug(f"DB search_memory failed, falling back to files: {e}")
 
     # File-based fallback
     return _search_memory_files(user_id, query)
@@ -308,35 +304,30 @@ def _search_memory_files(user_id: str, query: str) -> list[dict[str, str]]:
 
 async def list_memories(user_id: str) -> list[dict[str, Any]]:
     """List all memory entries with titles."""
-    db = await _get_db()
-    if db:
-        try:
-            from core.db_models import Memory
-            from sqlalchemy import select
-            result = await db.execute(
-                select(Memory)
-                .where(Memory.user_id == user_id)
-                .order_by(Memory.created_at)
-            )
-            rows = list(result.scalars().all())
-            await db.close()
-            return [
-                {
-                    "id": m.id,
-                    "title": m.title,
-                    "type": m.memory_type,
-                    "tags": m.tags_list,
-                    "source": m.source,
-                    "source_conversation_id": m.source_conversation_id,
-                }
-                for m in rows
-            ]
-        except Exception as e:
-            logger.debug(f"DB list_memories failed, falling back to files: {e}")
+    async with _get_db() as db:
+        if db:
             try:
-                await db.close()
-            except Exception:
-                pass
+                from core.db_models import Memory
+                from sqlalchemy import select
+                result = await db.execute(
+                    select(Memory)
+                    .where(Memory.user_id == user_id)
+                    .order_by(Memory.created_at)
+                )
+                rows = list(result.scalars().all())
+                return [
+                    {
+                        "id": m.id,
+                        "title": m.title,
+                        "type": m.memory_type,
+                        "tags": m.tags_list,
+                        "source": m.source,
+                        "source_conversation_id": m.source_conversation_id,
+                    }
+                    for m in rows
+                ]
+            except Exception as e:
+                logger.debug(f"DB list_memories failed, falling back to files: {e}")
 
     # File-based fallback
     return _list_memories_files(user_id)
@@ -374,64 +365,52 @@ async def update_memory(
     if memory_type is not None and memory_type not in _MEMORY_TYPES:
         memory_type = "note"
 
-    db = await _get_db()
-    if not db:
-        return False
-    try:
-        from core.db_models import Memory
-        from sqlalchemy import select
-        result = await db.execute(
-            select(Memory).where(
-                Memory.id == identifier, Memory.user_id == user_id,
-            )
-        )
-        mem = result.scalar_one_or_none()
-        if not mem:
-            await db.close()
+    async with _get_db() as db:
+        if not db:
             return False
-
-        if title is not None:
-            mem.title = title
-        if content is not None:
-            mem.content = content
-        if memory_type is not None:
-            mem.memory_type = memory_type
-        if tags is not None:
-            clean = [t.strip() for t in tags if t and t.strip()]
-            mem.tags = json.dumps(clean) if clean else None
-
-        await db.commit()
-        await db.close()
-        return True
-    except Exception as e:
-        logger.debug(f"DB update_memory failed: {e}")
         try:
-            await db.close()
-        except Exception:
-            pass
-        return False
+            from core.db_models import Memory
+            from sqlalchemy import select
+            result = await db.execute(
+                select(Memory).where(
+                    Memory.id == identifier, Memory.user_id == user_id,
+                )
+            )
+            mem = result.scalar_one_or_none()
+            if not mem:
+                return False
+
+            if title is not None:
+                mem.title = title
+            if content is not None:
+                mem.content = content
+            if memory_type is not None:
+                mem.memory_type = memory_type
+            if tags is not None:
+                clean = [t.strip() for t in tags if t and t.strip()]
+                mem.tags = json.dumps(clean) if clean else None
+
+            await db.commit()
+            return True
+        except Exception as e:
+            logger.debug(f"DB update_memory failed: {e}")
+            return False
 
 
 async def delete_memory(user_id: str, identifier: str) -> bool:
     """Delete a memory entry by ID. Returns True if deleted."""
-    db = await _get_db()
-    if db:
-        try:
-            from core.db_models import Memory
-            from sqlalchemy import delete
-            result = await db.execute(
-                delete(Memory).where(Memory.id == identifier, Memory.user_id == user_id)
-            )
-            await db.commit()
-            deleted = result.rowcount > 0
-            await db.close()
-            return deleted
-        except Exception as e:
-            logger.debug(f"DB delete_memory failed: {e}")
+    async with _get_db() as db:
+        if db:
             try:
-                await db.close()
-            except Exception:
-                pass
+                from core.db_models import Memory
+                from sqlalchemy import delete
+                result = await db.execute(
+                    delete(Memory).where(Memory.id == identifier, Memory.user_id == user_id)
+                )
+                await db.commit()
+                return result.rowcount > 0
+            except Exception as e:
+                logger.debug(f"DB delete_memory failed: {e}")
     return False
 
 

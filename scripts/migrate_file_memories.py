@@ -71,41 +71,39 @@ async def migrate() -> None:
 
         print(f"\nMigrating memories for user: {user_id} ({len(md_files)} files)")
 
-        db = await get_db()
-        try:
-            for md_file in md_files:
-                text = md_file.read_text(encoding="utf-8")
-                title = _extract_title(text, md_file.name)
-                memory_type = _extract_type_from_frontmatter(text)
+        async with get_db() as db:
+            try:
+                for md_file in md_files:
+                    text = md_file.read_text(encoding="utf-8")
+                    title = _extract_title(text, md_file.name)
+                    memory_type = _extract_type_from_frontmatter(text)
 
-                # Check if already exists
-                from sqlalchemy import select
-                result = await db.execute(
-                    select(Memory.id)
-                    .where(Memory.user_id == user_id, Memory.title == title)
-                    .limit(1)
-                )
-                if result.scalar_one_or_none():
-                    print(f"  SKIP (exists): {md_file.name}")
-                    total_skipped += 1
-                    continue
+                    # Check if already exists
+                    from sqlalchemy import select
+                    result = await db.execute(
+                        select(Memory.id)
+                        .where(Memory.user_id == user_id, Memory.title == title)
+                        .limit(1)
+                    )
+                    if result.scalar_one_or_none():
+                        print(f"  SKIP (exists): {md_file.name}")
+                        total_skipped += 1
+                        continue
 
-                mem = Memory(
-                    user_id=user_id,
-                    title=title,
-                    content=text,
-                    memory_type=memory_type,
-                )
-                db.add(mem)
-                print(f"  OK: {md_file.name} -> '{title}' (type: {memory_type})")
-                total_migrated += 1
+                    mem = Memory(
+                        user_id=user_id,
+                        title=title,
+                        content=text,
+                        memory_type=memory_type,
+                    )
+                    db.add(mem)
+                    print(f"  OK: {md_file.name} -> '{title}' (type: {memory_type})")
+                    total_migrated += 1
 
-            await db.commit()
-        except Exception as e:
-            print(f"  ERROR: {e}")
-            await db.rollback()
-        finally:
-            await db.close()
+                await db.commit()
+            except Exception as e:
+                print(f"  ERROR: {e}")
+                await db.rollback()
 
     print(f"\nDone. Migrated: {total_migrated}, Skipped: {total_skipped}")
     await shutdown_db()

@@ -7,15 +7,20 @@ services:
     ports:
       - "${PORT:-8000}:8000"
     environment:
-      DATABASE_URL: "postgresql+asyncpg://lightcc:lightcc@postgres:5432/lightcc"
+      # Prefer an explicit DATABASE_URL from .env (e.g. external Postgres); else
+      # fall back to the in-stack postgres service with POSTGRES_PASSWORD.
+      DATABASE_URL: "${DATABASE_URL:-postgresql+asyncpg://lightcc:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/lightcc}"
       REDIS_URL: "redis://redis:6379/0"
-      JWT_SECRET: "${JWT_SECRET:?Set JWT_SECRET in .env}"
+      # JWT_SECRET is required in production. In development (ENV=development)
+      # the entrypoint falls back to a stable per-deploy secret in data/.dev_jwt_secret.
+      JWT_SECRET: "${JWT_SECRET:-}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"
       OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
       ADMIN_EMAIL: "${ADMIN_EMAIL:-}"
       ADMIN_PASSWORD: "${ADMIN_PASSWORD:-}"
       ADMIN_NAME: "${ADMIN_NAME:-Admin}"
-      ENV: "production"
+      ENV: "${ENV:-production}"
     depends_on:
       postgres:
         condition: service_healthy
@@ -40,7 +45,7 @@ services:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: lightcc
-      POSTGRES_PASSWORD: lightcc
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}"
       POSTGRES_DB: lightcc
     volumes:
       - pg-data:/var/lib/postgresql/data

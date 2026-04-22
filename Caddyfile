@@ -10,14 +10,17 @@
     # gzip + zstd where supported
     encode zstd gzip
 
-    # Basic hardening headers
+    # Hardening headers. The Svelte build inlines all JS/CSS locally, so
+    # default-src 'self' + connect-src 'self' wss: is enough for the app.
+    # 'unsafe-inline' on style-src is required for Svelte's scoped styles
+    # (these are injected as <style> blocks, no user-controlled input).
     header {
-        # HSTS: 1 year, include subdomains. Remove includeSubDomains if you host
-        # subdomains that are NOT on HTTPS.
-        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
         X-Content-Type-Options "nosniff"
-        X-Frame-Options "SAMEORIGIN"
-        Referrer-Policy "strict-origin-when-cross-origin"
+        X-Frame-Options "DENY"
+        Referrer-Policy "no-referrer"
+        Permissions-Policy "geolocation=(), camera=(), microphone=(), payment=(), usb=(), accelerometer=(), gyroscope=()"
+        Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' wss: https:; worker-src 'self' blob:; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
         # Remove the Caddy server banner
         -Server
     }

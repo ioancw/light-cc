@@ -87,15 +87,16 @@ class PluginLoader:
             except Exception as e:
                 logger.error(f"Plugin '{name}': failed to load MCP config: {e}")
 
-        # 2. Load commands from commands/ directory (namespaced as plugin-name:command-name)
+        # 2. Load commands from commands/ directory as legacy-command skills
+        # (namespaced as plugin-name:command-name, registered in the unified
+        # skills registry alongside SKILL.md entries -- single resolver).
         commands_dir = plugin_dir / "commands"
         if commands_dir.exists():
-            from commands.loader import discover_commands
-            from commands.registry import _COMMANDS
-            for cmd in discover_commands(commands_dir):
+            from skills.registry import discover_commands_as_skills, register_skill
+            for cmd in discover_commands_as_skills(commands_dir):
                 namespaced = f"{name}:{cmd.name}"
-                cmd.name = namespaced
-                _COMMANDS[namespaced] = cmd
+                cmd = cmd.model_copy(update={"name": namespaced})
+                register_skill(cmd)
                 info.commands.append(namespaced)
 
         # 3. Load skills from skills/ directory (namespaced as plugin-name:skill-name)
@@ -142,11 +143,8 @@ class PluginLoader:
         from core.db_models import User
 
         source_label = f"plugin:{plugin_name}"
-        db = await get_db()
-        try:
+        async with get_db() as db:
             user_ids = list((await db.execute(select(User.id))).scalars().all())
-        finally:
-            await db.close()
 
         for uid in user_ids:
             try:
@@ -163,16 +161,14 @@ class PluginLoader:
         from core.db_models import AgentDefinition
 
         source_label = f"plugin:{plugin_name}"
-        db = await get_db()
-        try:
-            await db.execute(
-                delete(AgentDefinition).where(AgentDefinition.source == source_label)
-            )
-            await db.commit()
-        except Exception as e:
-            logger.warning(f"Plugin '{plugin_name}': failed to delete agents: {e}")
-        finally:
-            await db.close()
+        async with get_db() as db:
+            try:
+                await db.execute(
+                    delete(AgentDefinition).where(AgentDefinition.source == source_label)
+                )
+                await db.commit()
+            except Exception as e:
+                logger.warning(f"Plugin '{plugin_name}': failed to delete agents: {e}")
 
     async def load_plugins_from(self, base_dir: Path) -> list[PluginInfo]:
         """Scan base_dir for subdirectories containing .claude-plugin/."""
@@ -207,11 +203,12 @@ class PluginLoader:
             for server_name in info.mcp_servers:
                 await manager.disconnect(server_name)
 
-        # Remove plugin commands from global registry
+        # Remove plugin commands (now stored as legacy-command skills) from
+        # the unified skills registry.
         if info.commands:
-            from commands.registry import _COMMANDS
+            from skills.registry import unregister_skill
             for cmd_name in info.commands:
-                _COMMANDS.pop(cmd_name, None)
+                unregister_skill(cmd_name)
 
         # Remove plugin skills from global registry
         if info.skills:

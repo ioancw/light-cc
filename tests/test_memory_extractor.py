@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -51,8 +52,9 @@ async def _make_conv_with_messages(
 async def extractor_db(test_db: AsyncSession, test_user: User):
     """Patch every get_db in the extractor's call path + save_memory + enqueue."""
 
+    @asynccontextmanager
     async def _get_test_db():
-        return test_db
+        yield test_db
 
     with patch("core.memory_extractor.get_db", side_effect=_get_test_db), \
          patch("memory.manager._get_db", side_effect=_get_test_db):

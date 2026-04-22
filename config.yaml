@@ -24,7 +24,7 @@ server:
 
 auth:
   registration_enabled: true
-  jwt_expiry_hours: 1
+  jwt_expiry_hours: 0.25
   jwt_refresh_expiry_days: 7
 
 # Available models (used by model selector and routing)

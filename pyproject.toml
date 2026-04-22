@@ -21,3 +21,15 @@ line-length = 120
 [tool.ruff.lint]
 select = ["E", "F", "W"]
 ignore = ["E501"]  # line length handled by formatter
+
+[tool.coverage.run]
+source = ["core", "routes", "handlers"]
+branch = false
+omit = ["*/tests/*", "*/__pycache__/*"]
+
+[tool.coverage.report]
+# Floor is set to the current observed baseline so CI blocks regressions.
+# TODO: ratchet toward 70% as handlers/ and routes/ get more integration tests.
+fail_under = 40
+show_missing = true
+skip_covered = false

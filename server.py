@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -60,10 +61,50 @@ for commands_dir in settings.paths.commands_dirs:
     load_commands(resolved)
 
 # ─── FastAPI lifespan (startup + shutdown) ───
+_TENANT_SENSITIVE_ENV = (
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "JWT_SECRET",
+    "DATABASE_URL",
+    "POSTGRES_PASSWORD",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "GITHUB_TOKEN",
+    "GH_TOKEN",
+    "TAVILY_API_KEY",
+    "SECRET_KEY",
+)
+
+
+def _scrub_parent_env() -> None:
+    """Prime clients that read os.environ lazily, then pop tenant-sensitive keys.
+
+    Rationale: ``_build_safe_env`` scrubs the child's env dict, but a tenant
+    subprocess can still read the *parent* process's environment via
+    ``/proc/1/environ`` (or similar). The only durable fix is for the parent
+    process to forget the secrets once they've been captured by the SDK
+    clients and the Settings object.
+    """
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        try:
+            from core.client import get_client
+            get_client()
+            from core.providers.anthropic import _get_client as _prime_anthropic
+            _prime_anthropic()
+        except Exception as e:
+            logger.warning("Anthropic client prime before env scrub failed: %s", e)
+
+    popped = [k for k in _TENANT_SENSITIVE_ENV if os.environ.pop(k, None) is not None]
+    if not settings.jwt_secret:
+        raise RuntimeError("settings.jwt_secret lost after env scrub — aborting start")
+    logger.info("Scrubbed %d tenant-sensitive env var(s) from parent process", len(popped))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     setup_logging()
     setup_telemetry()
+    _scrub_parent_env()
 
     # Instrument FastAPI with OpenTelemetry if available
     try:
@@ -148,12 +189,9 @@ async def lifespan(app: FastAPI):
         from sqlalchemy import select as _select
 
         user_rows: list[str] = []
-        _db = await get_db()
-        try:
+        async with get_db() as _db:
             _res = await _db.execute(_select(User.id))
             user_rows = list(_res.scalars().all())
-        finally:
-            await _db.close()
 
         for agents_dir in settings.paths.agents_dirs:
             resolved = Path(agents_dir).expanduser()
@@ -225,9 +263,8 @@ async def health():
     checks: dict[str, str] = {}
     try:
         from sqlalchemy import text
-        db = await get_db()
-        await db.execute(text("SELECT 1"))
-        await db.close()
+        async with get_db() as db:
+            await db.execute(text("SELECT 1"))
         checks["database"] = "ok"
     except Exception as e:
         checks["database"] = f"error: {e}"
@@ -268,9 +305,8 @@ async def health_ready():
     from fastapi.responses import JSONResponse
     try:
         from sqlalchemy import text
-        db = await get_db()
-        await db.execute(text("SELECT 1"))
-        await db.close()
+        async with get_db() as db:
+            await db.execute(text("SELECT 1"))
     except Exception as e:
         return JSONResponse({"status": "not_ready", "reason": f"database: {e}"}, status_code=503)
 
