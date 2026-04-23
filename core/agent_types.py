@@ -33,12 +33,37 @@ EXCLUDED_TOOLS = {
 _registry: dict[str, AgentType] = {}
 
 
+# CC-style aliases mapped to Light CC's canonical builtin names. Keys are
+# lowercased so lookup is case-insensitive (``Explore``, ``explore``,
+# ``EXPLORE`` all resolve). Alias resolution is a fallback -- callers
+# must check user-defined AgentDefinitions first so a user agent named
+# ``explorer`` still shadows the builtin regardless of how the caller
+# spelled the name. See ``tools/subagent.py::handle_task``.
+_CC_BUILTIN_ALIASES: dict[str, str] = {
+    "explore": "explorer",
+    "plan": "planner",
+    "general-purpose": "default",
+}
+
+
 def register_agent_type(agent_type: AgentType) -> None:
     _registry[agent_type.name] = agent_type
 
 
 def get_agent_type(name: str) -> AgentType | None:
-    return _registry.get(name)
+    """Resolve a builtin by name, accepting CC-style aliases case-insensitively.
+
+    Exact (canonical) matches win so existing lowercase names keep behaving
+    identically. Otherwise we fall back to the alias table -- ``Explore`` →
+    ``explorer``, ``Plan`` → ``planner``, ``general-purpose`` → ``default``.
+    """
+    direct = _registry.get(name)
+    if direct is not None:
+        return direct
+    alias_target = _CC_BUILTIN_ALIASES.get(name.lower())
+    if alias_target is not None:
+        return _registry.get(alias_target)
+    return None
 
 
 def list_agent_types() -> list[AgentType]:
