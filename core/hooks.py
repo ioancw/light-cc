@@ -9,6 +9,8 @@ Events:
 - SessionStart: when a session is created
 - SessionEnd: when a session is destroyed
 - PromptSubmit: when user sends a message
+- SubagentStart: when an Agent tool dispatch spawns a subagent
+  (payload: ``{subagent_type, agent_id, parent_session_id, description}``)
 """
 
 from __future__ import annotations

@@ -435,6 +435,25 @@ async def handle_task(tool_input: dict[str, Any]) -> str:
     )
     _active_agents[new_id] = state
 
+    # SubagentStart hook -- CC-compat lifecycle event that fires once per
+    # Agent dispatch before the loop begins. OTEL / audit setups attach
+    # here to get per-subagent attribution. Payload mirrors CC's event
+    # shape (subagent_type, agent_id, parent_session_id, description).
+    try:
+        from core.hooks import has_hooks, fire_hooks
+        if has_hooks("SubagentStart"):
+            await fire_hooks(
+                "SubagentStart",
+                {
+                    "subagent_type": subagent_type,
+                    "agent_id": new_id,
+                    "parent_session_id": parent_session_id,
+                    "description": description,
+                },
+            )
+    except Exception as e:
+        logger.warning(f"SubagentStart hook firing failed: {e}")
+
     async def _run_foreground() -> str:
         run_id: str | None = None
         try:
