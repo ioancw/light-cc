@@ -301,11 +301,12 @@ async def _run_via_builtin(
 async def handle_task(tool_input: dict[str, Any]) -> str:
     """Agent tool handler -- CC-compliant delegation entry point.
 
-    Schema: ``{subagent_type, prompt, description?, run_in_background?, model?}``
+    Schema: ``{subagent_type, prompt, description?, run_in_background?, model?}``.
+    ``description`` is optional (CC compat); missing / empty → "Subagent run".
     """
     subagent_type = tool_input.get("subagent_type") or tool_input.get("agent_type") or "default"
     prompt = tool_input.get("prompt", "")
-    description = tool_input.get("description", "")
+    description = tool_input.get("description") or "Subagent run"
     run_in_background = bool(tool_input.get("run_in_background", False))
     model_override = tool_input.get("model")
 
@@ -607,7 +608,10 @@ register_tool(
             },
             "description": {
                 "type": "string",
-                "description": "Short (3-5 word) description of the task, shown in UI and notifications.",
+                "description": (
+                    "Short (3-5 word) description of the task, shown in UI and "
+                    "notifications. Optional -- defaults to 'Subagent run'."
+                ),
             },
             "run_in_background": {
                 "type": "boolean",
@@ -618,7 +622,7 @@ register_tool(
                 "description": "Optional model override for this delegation (e.g. 'claude-haiku-4-5-20251001').",
             },
         },
-        "required": ["subagent_type", "prompt", "description"],
+        "required": ["subagent_type", "prompt"],
     },
     handler=handle_task,
 )
