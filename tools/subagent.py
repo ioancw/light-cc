@@ -12,8 +12,10 @@ Lookup order for ``subagent_type``:
   2. Builtin ``AgentType`` (explorer, planner, coder, researcher, default).
      Runs ephemerally -- no DB record.
 
-Nested delegation is allowed but capped at depth 2 via ``Agent`` being excluded
-from the subagent's own tool set (see ``EXCLUDED_TOOLS``).
+Delegation is strictly one level: main agent → subagent. Subagents do not
+receive ``Agent``/``Task``/``SendMessage`` (see ``EXCLUDED_TOOLS``), so they
+cannot spawn their own subagents or talk sideways to siblings. Orchestration
+stays parent-side.
 
 ``Task`` is preserved as an alias of ``Agent`` for back-compat with CC <2.1.63.
 """
