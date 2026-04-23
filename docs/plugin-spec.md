@@ -114,3 +114,59 @@ MCP servers are started when the plugin loads and stopped when it unloads.
 3. **Loading**: MCP servers are started, commands and skills are registered (namespaced).
 4. **Runtime**: Skills and commands are available to users and the agent.
 5. **Unload**: MCP servers are disconnected. Skills/commands remain registered until restart.
+
+## Compatibility with Claude Code
+
+Light CC aims to be a drop-in target for plugins authored against Claude
+Code — skills, commands, and agents you built in CC should run unchanged.
+The sections below document the small set of places where Light CC's
+runtime diverges from CC, and why.
+
+### Agent tool
+
+- **`description` is optional** (CC parity). Missing or empty values
+  default to `"Subagent run"`. Schema still lists it as a documented
+  parameter so CC plugins that set it keep working.
+- **No `resume` parameter.** CC did not historically support
+  `Agent(resume=<id>, prompt=...)` — resumption has always been
+  `SendMessage(to=<id>, message=...)`. Light CC matches that.
+- **SendMessage is always enabled.** No
+  `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` env var is required to
+  continue a sub-conversation.
+- **Builtin aliases (CC compat):** `Explore` → `explorer`,
+  `Plan` → `planner`, `general-purpose` → `default`, resolved
+  case-insensitively. Light CC's canonical names stay lowercase.
+  User-defined `AgentDefinition`s still shadow builtins regardless
+  of how the caller spelled the name.
+- **Agent tool result payload is richer** than CC's (CC does not
+  publish a field contract). Light CC extends the payload with:
+  - `status`: `"completed"` | `"started"` (background) | `"failed"`
+  - `total_duration_ms`, `total_tool_use_count`, `total_tokens`
+  - `usage`: `{input_tokens, output_tokens}`
+
+  Existing fields (`result`, `agent_id`, `run_id`, `subagent_type`)
+  are preserved. Field names use snake_case per Python convention;
+  CC plugins that only consume the existing fields see no change.
+
+### Hooks
+
+- **Light CC runs a subset of CC's hook events today:** `PreToolUse`,
+  `PostToolUse`, `SessionStart`, `SessionEnd`, `PromptSubmit`,
+  `SubagentStart`. The `SubagentStart` payload matches CC's shape
+  (`{subagent_type, agent_id, parent_session_id, description}`).
+- **`UserPromptSubmit` is named `PromptSubmit`** here — a pre-existing
+  Light CC name that predates CC's rename; a follow-up pass will
+  alias both to the CC spelling.
+- Other CC events (`SubagentStop`, `Stop`, `PreCompact`,
+  `PostCompact`, `PostToolUseFailure`, `PermissionRequest`,
+  `Notification`) are not yet wired. Hook-config that references
+  them loads without error but never fires.
+
+### Intent routing
+
+Light CC runs an intent router **in addition to** CC's
+model-inference-based subagent dispatch. A CC plugin with carefully
+tuned `description` fields may see slightly different dispatch
+behaviour in Light CC because the router can short-circuit an
+otherwise model-chosen builtin. Tune agent descriptions in
+Light CC if you need deterministic routing.
