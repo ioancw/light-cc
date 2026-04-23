@@ -113,6 +113,55 @@ async def _subagent_permission_check(name: str, tool_input: dict[str, Any]) -> b
     return True
 
 
+# ── Telemetry payload (Light CC extension to CC's Agent tool result) ────
+#
+# CC does not publish a field contract for Agent tool results, so these
+# fields are a Light CC extension the plugin spec documents. The plugin
+# Compatibility section explains why we emit them and how consumers
+# should treat them. Field names use snake_case per Python convention.
+
+
+def _count_tool_uses(messages: list[dict[str, Any]]) -> int:
+    """Count tool_use blocks across assistant turns in a captured message list.
+
+    Each Agent loop iteration that invokes a tool produces an assistant
+    message with one or more ``tool_use`` content blocks. Summing them
+    gives the total tool invocations inside the subagent -- a direct
+    signal of how much work the subagent did.
+    """
+    total = 0
+    for msg in messages:
+        if msg.get("role") != "assistant":
+            continue
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "tool_use":
+                total += 1
+    return total
+
+
+def _build_telemetry_block(
+    *,
+    status: str,
+    telemetry: "_RunTelemetry",
+    messages: list[dict[str, Any]],
+    start_time: float,
+) -> dict[str, Any]:
+    """Build the telemetry fields merged into the Agent / SendMessage payload."""
+    return {
+        "status": status,
+        "total_duration_ms": int((time.time() - start_time) * 1000),
+        "total_tool_use_count": _count_tool_uses(messages),
+        "total_tokens": telemetry.input_tokens + telemetry.output_tokens,
+        "usage": {
+            "input_tokens": telemetry.input_tokens,
+            "output_tokens": telemetry.output_tokens,
+        },
+    }
+
+
 # ── Resolution: AgentDefinition first, then builtin AgentType ────────────
 
 async def _resolve_agent_definition(name: str, user_id: str | None):
@@ -141,18 +190,33 @@ def _get_tools_for_agent_type(at: AgentType | None) -> list[dict[str, Any]]:
 
 # ── Execution paths ─────────────────────────────────────────────────────
 
+@dataclass
+class _RunTelemetry:
+    """Usage + outcome metadata surfaced back to the Agent tool payload.
+
+    Populated by both execution paths so ``handle_task`` can build a uniform
+    telemetry block regardless of whether the subagent resolved to a user
+    ``AgentDefinition`` or a builtin ``AgentType``.
+    """
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    failed: bool = False
+
+
 async def _run_via_definition(
     agent_def,
     prompt: str,
     parent_session_id: str | None,
     *,
     prior_messages: list[dict[str, Any]] | None = None,
-) -> tuple[str, str, list[dict[str, Any]]]:
-    """Run a user-defined AgentDefinition. Returns ``(result_text, run_id, messages)``.
+) -> tuple[str, str, list[dict[str, Any]], _RunTelemetry]:
+    """Run a user-defined AgentDefinition.
 
-    Delegates to ``run_agent_once`` so each Agent invocation produces an
-    ``AgentRun`` row for observability. The parent conversation is already the
-    record of the delegation, so we don't persist a child conversation.
+    Returns ``(result_text, run_id, messages, telemetry)``. Delegates to
+    ``run_agent_once`` so each Agent invocation produces an ``AgentRun`` row
+    for observability. The parent conversation is already the record of the
+    delegation, so we don't persist a child conversation.
 
     ``prior_messages`` lets SendMessage continue an existing sub-conversation
     by appending the new prompt to the captured history; ``capture_messages``
@@ -169,9 +233,14 @@ async def _run_via_definition(
         capture_messages=True,
     )
     captured = result.messages or []
+    telemetry = _RunTelemetry(
+        input_tokens=result.input_tokens,
+        output_tokens=result.output_tokens,
+        failed=result.status == "failed",
+    )
     if result.status == "failed":
-        return (f"Subagent failed: {result.error or 'unknown error'}", result.run_id, captured)
-    return (result.result_text or "(no output)", result.run_id, captured)
+        return (f"Subagent failed: {result.error or 'unknown error'}", result.run_id, captured, telemetry)
+    return (result.result_text or "(no output)", result.run_id, captured, telemetry)
 
 
 async def run_subagent(
@@ -234,12 +303,12 @@ async def _run_via_builtin(
     model_override: str | None,
     *,
     prior_messages: list[dict[str, Any]] | None = None,
-) -> tuple[str, list[dict[str, Any]]]:
+) -> tuple[str, list[dict[str, Any]], _RunTelemetry]:
     """Run a builtin AgentType ephemerally (no DB record).
 
-    Returns ``(result_text, messages)``. ``prior_messages`` lets SendMessage
-    continue an existing sub-conversation by seeding the loop with the
-    captured history before appending the new prompt.
+    Returns ``(result_text, messages, telemetry)``. ``prior_messages`` lets
+    SendMessage continue an existing sub-conversation by seeding the loop
+    with the captured history before appending the new prompt.
     """
     from core import agent
 
@@ -260,6 +329,7 @@ async def _run_via_builtin(
     else:
         messages = [{"role": "user", "content": prompt}]
     output_parts: list[str] = []
+    telemetry = _RunTelemetry()
 
     async def on_text(text: str) -> None:
         output_parts.append(text)
@@ -269,6 +339,10 @@ async def _run_via_builtin(
 
     async def on_tool_end(ctx: Any, result: str) -> None:
         pass
+
+    async def on_usage(input_tokens: int, output_tokens: int) -> None:
+        telemetry.input_tokens += input_tokens
+        telemetry.output_tokens += output_tokens
 
     # ``agent.run`` rebinds its local ``messages`` after repair_tool_use_pairs,
     # so we have to capture its return value -- the caller's list reference
@@ -283,19 +357,22 @@ async def _run_via_builtin(
                 on_tool_start=on_tool_start,
                 on_tool_end=on_tool_end,
                 on_permission_check=_subagent_permission_check,
+                on_usage=on_usage,
                 max_turns=max_turns,
                 model=model,
             ),
             timeout=timeout,
         )
     except asyncio.TimeoutError:
+        telemetry.failed = True
         return (
             f"Sub-agent timed out after {timeout}s. "
             f"Partial output: {''.join(output_parts)[:1000]}",
             messages,
+            telemetry,
         )
 
-    return "".join(output_parts)[:max_result_chars], (final_messages or messages)
+    return "".join(output_parts)[:max_result_chars], (final_messages or messages), telemetry
 
 
 # ── Tool handler ────────────────────────────────────────────────────────
@@ -340,11 +417,12 @@ async def handle_task(tool_input: dict[str, Any]) -> str:
 
     _cleanup_agents()
     new_id = uuid.uuid4().hex[:8]
+    start_time = time.time()
     state = SubAgentState(
         agent_id=new_id,
         subagent_type=subagent_type,
         status="running",
-        created_at=time.time(),
+        created_at=start_time,
         description=description,
         user_id=user_id,
         parent_session_id=parent_session_id,
@@ -358,30 +436,42 @@ async def handle_task(tool_input: dict[str, Any]) -> str:
     _active_agents[new_id] = state
 
     async def _run_foreground() -> str:
+        run_id: str | None = None
         try:
             if agent_def is not None:
-                result, run_id, captured = await _run_via_definition(
+                result, run_id, captured, telemetry = await _run_via_definition(
                     agent_def, prompt, parent_session_id,
                 )
-                state.messages = captured
-                state.status = "completed"
-                state.result = result
-                return json.dumps({
-                    "result": result, "agent_id": new_id, "run_id": run_id,
-                    "subagent_type": subagent_type,
-                })
-            result, captured = await _run_via_builtin(at, prompt, model_override)
+            else:
+                result, captured, telemetry = await _run_via_builtin(
+                    at, prompt, model_override,
+                )
             state.messages = captured
-            state.status = "completed"
+            state.status = "failed" if telemetry.failed else "completed"
             state.result = result
-            return json.dumps({
-                "result": result, "agent_id": new_id,
+            payload: dict[str, Any] = {
+                "result": result,
+                "agent_id": new_id,
                 "subagent_type": subagent_type,
-            })
+                **_build_telemetry_block(
+                    status=state.status,
+                    telemetry=telemetry,
+                    messages=captured,
+                    start_time=start_time,
+                ),
+            }
+            if run_id is not None:
+                payload["run_id"] = run_id
+            return json.dumps(payload)
         except Exception as e:
             state.status = "failed"
             state.result = str(e)
-            return json.dumps({"error": str(e), "agent_id": new_id})
+            return json.dumps({
+                "error": str(e),
+                "agent_id": new_id,
+                "status": "failed",
+                "total_duration_ms": int((time.time() - start_time) * 1000),
+            })
         finally:
             if state.done_event is not None:
                 state.done_event.set()
@@ -521,15 +611,16 @@ async def handle_send_message(tool_input: dict[str, Any]) -> str:
             })
 
     lock = state.lock or asyncio.Lock()
+    start_time = time.time()
     async with lock:
         try:
             if agent_def is not None:
-                result_text, _run_id, updated = await _run_via_definition(
+                result_text, _run_id, updated, telemetry = await _run_via_definition(
                     agent_def, new_message, state.parent_session_id,
                     prior_messages=state.messages,
                 )
             else:
-                result_text, updated = await _run_via_builtin(
+                result_text, updated, telemetry = await _run_via_builtin(
                     at, new_message, state.model_override,
                     prior_messages=state.messages,
                 )
@@ -537,12 +628,23 @@ async def handle_send_message(tool_input: dict[str, Any]) -> str:
             state.result = result_text
         except Exception as e:
             logger.error(f"SendMessage continuation failed: {e}")
-            return json.dumps({"error": str(e), "agent_id": target_id})
+            return json.dumps({
+                "error": str(e),
+                "agent_id": target_id,
+                "status": "failed",
+                "total_duration_ms": int((time.time() - start_time) * 1000),
+            })
 
     return json.dumps({
         "result": result_text,
         "agent_id": target_id,
         "subagent_type": state.subagent_type,
+        **_build_telemetry_block(
+            status="failed" if telemetry.failed else "completed",
+            telemetry=telemetry,
+            messages=updated,
+            start_time=start_time,
+        ),
     })
 
 

@@ -42,6 +42,11 @@ class AgentRunResult:
     # teams). Default ``None`` keeps the structure cheap for the common
     # one-shot dispatch path.
     messages: list[dict[str, Any]] | None = None
+    # Split usage tracking -- ``tokens_used`` is the combined total kept for
+    # backward compatibility; these two add per-direction detail that the
+    # Agent tool surfaces to callers as a ``usage`` breakdown.
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 
 async def trigger_agent_run(
@@ -208,10 +213,14 @@ async def run_agent_once(
         pass
 
     tokens_used = 0
+    input_tokens_total = 0
+    output_tokens_total = 0
 
     async def on_usage(input_tokens: int, output_tokens: int) -> None:
-        nonlocal tokens_used
+        nonlocal tokens_used, input_tokens_total, output_tokens_total
         tokens_used += input_tokens + output_tokens
+        input_tokens_total += input_tokens
+        output_tokens_total += output_tokens
 
     status = "running"
     error: str | None = None
@@ -306,6 +315,8 @@ async def run_agent_once(
         tokens_used=tokens_used,
         conversation_id=conv_id,
         messages=messages if capture_messages else None,
+        input_tokens=input_tokens_total,
+        output_tokens=output_tokens_total,
     )
 
 
