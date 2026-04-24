@@ -2,6 +2,29 @@
 
 import { appState, setAuth, clearAuth, showToast } from './state.svelte.js';
 
+/**
+ * @typedef {Object} AuthResponse
+ * @property {string} access_token
+ * @property {string} refresh_token
+ * @property {{id:string,email:string,display_name?:string}} user
+ */
+
+/**
+ * @typedef {Object} ServerConversation
+ * @property {string} id
+ * @property {string} title
+ * @property {string} created_at
+ * @property {string} updated_at
+ * @property {boolean} [generating]
+ */
+
+/**
+ * @typedef {Object} SearchHit
+ * @property {string} conversation_id
+ * @property {string} title
+ * @property {string} snippet
+ */
+
 function logApiError(context, err) {
   // Background paths call this so a dropped network doesn't become a toast storm.
   // User-initiated calls add their own toast on top.
@@ -18,6 +41,11 @@ function authHeaders() {
 
 // ── Auth ──
 
+/**
+ * @param {string} email
+ * @param {string} password
+ * @returns {Promise<AuthResponse>}
+ */
 export async function login(email, password) {
   const resp = await fetch('/api/auth/login', {
     method: 'POST',
@@ -30,6 +58,12 @@ export async function login(email, password) {
   return data;
 }
 
+/**
+ * @param {string} displayName
+ * @param {string} email
+ * @param {string} password
+ * @returns {Promise<AuthResponse>}
+ */
 export async function register(displayName, email, password) {
   const resp = await fetch('/api/auth/register', {
     method: 'POST',
@@ -49,6 +83,12 @@ export function logout() {
 
 // ── Conversations ──
 
+/**
+ * Hydrate `appState.conversations` with the authenticated user's conversation
+ * list. Server rows are merged in as stubs (title/timestamps only) until the
+ * user opens them; existing local conversations keep their message arrays.
+ * @param {string} [query] optional search term; the server filters by title
+ */
 export async function fetchConversationHistory(query) {
   if (!appState.authToken) return;
   try {
@@ -114,6 +154,10 @@ export async function fetchConversationHistory(query) {
   }
 }
 
+/**
+ * @param {string} serverId
+ * @param {string} title
+ */
 export async function renameConversation(serverId, title) {
   if (!appState.authToken || !serverId) return;
   try {
@@ -129,6 +173,11 @@ export async function renameConversation(serverId, title) {
   }
 }
 
+/**
+ * Delete a persisted conversation, then drop every local entry that
+ * references it.
+ * @param {string} serverId
+ */
 export async function deleteServerConversation(serverId) {
   if (!appState.authToken) return;
   try {
@@ -149,6 +198,10 @@ export async function deleteServerConversation(serverId) {
   }
 }
 
+/**
+ * @param {string} query
+ * @returns {Promise<SearchHit[]>}
+ */
 export async function searchConversations(query) {
   if (!appState.authToken || !query.trim()) return [];
   try {
@@ -163,6 +216,9 @@ export async function searchConversations(query) {
   }
 }
 
+/**
+ * @param {File} file Markdown transcript to import.
+ */
 export async function importConversation(file) {
   const formData = new FormData();
   formData.append('file', file);
@@ -180,6 +236,7 @@ export async function importConversation(file) {
 
 // ── Files ──
 
+/** @param {string} [path] relative to the tenant workspace root */
 export async function listFiles(path = '') {
   const resp = await fetch(`/api/files/list?path=${encodeURIComponent(path)}`, {
     headers: { 'Authorization': `Bearer ${appState.authToken}` },
@@ -196,6 +253,10 @@ export async function readFile(path) {
   return resp.json();
 }
 
+/**
+ * @param {string} path target directory (relative to workspace root)
+ * @param {File} file
+ */
 export async function uploadFile(path, file) {
   const formData = new FormData();
   formData.append('file', file);

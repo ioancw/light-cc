@@ -14,12 +14,6 @@
     'disconnected'
   );
 
-  let dotColor = $derived(
-    appState.connected ? 'var(--green)' :
-    appState.connecting ? 'var(--amber)' :
-    'var(--red)'
-  );
-
   let currentTokens = $derived(
     appState.currentId && appState.conversations[appState.currentId]
       ? (appState.conversations[appState.currentId].totalTokens || 0)
@@ -29,7 +23,7 @@
 
 <div class="status-bar">
   <div class="connection">
-    <div class="status-dot" style:background={dotColor} style:box-shadow="0 0 6px {dotColor}"></div>
+    <div class="status-dot {statusClass}"></div>
     <span class="status-text {statusClass}">{statusText}</span>
   </div>
   <span class="status-sep"></span>
@@ -59,6 +53,19 @@
     width: 6px; height: 6px;
     border-radius: 50%;
     flex-shrink: 0;
+    background: var(--dot-color, var(--muted));
+    box-shadow: 0 0 6px var(--dot-color, transparent);
+    transition: background 0.2s ease, box-shadow 0.2s ease;
+  }
+  .status-dot.connected { --dot-color: var(--green); }
+  .status-dot.connecting {
+    --dot-color: var(--amber);
+    animation: dot-pulse 1.2s ease-in-out infinite;
+  }
+  .status-dot.disconnected { --dot-color: var(--red); }
+  @keyframes dot-pulse {
+    0%, 100% { opacity: 0.5; }
+    50% { opacity: 1; }
   }
 
   .status-text {

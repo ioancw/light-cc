@@ -3,6 +3,7 @@
   import Image from './renderers/Image.svelte';
   import Table from './renderers/Table.svelte';
   import HtmlEmbed from './renderers/HtmlEmbed.svelte';
+  import { getToolBadge } from '../lib/toolBadge.js';
 
   let { tc } = $props();
   let expanded = $state(false);
@@ -14,17 +15,6 @@
 
   function toggleOutput() {
     outputExpanded = !outputExpanded;
-  }
-
-  function getToolBadge(name) {
-    const n = name.toLowerCase();
-    if (n === 'bash') return { cls: 'bash', label: 'bash' };
-    if (n === 'python_exec') return { cls: 'python', label: 'python' };
-    if (n.includes('chart')) return { cls: 'chart', label: 'chart' };
-    if (n.includes('read') || n.includes('fetch') || n.includes('get')) return { cls: 'read', label: 'read' };
-    if (n.includes('write') || n.includes('create') || n.includes('save') || n.includes('edit')) return { cls: 'write', label: 'write' };
-    if (n.includes('search') || n.includes('find') || n.includes('query') || n.includes('grep') || n.includes('glob')) return { cls: 'search', label: 'search' };
-    return { cls: 'generic', label: 'tool' };
   }
 
   let badge = $derived(getToolBadge(tc.name));
@@ -151,9 +141,22 @@
   });
 </script>
 
-<div class="tool-block" class:expanded class:errored={isError} role="region" aria-label="{tc.name} tool call">
+<div
+  class="tool-block tool-cat-{badge.cls}"
+  class:expanded
+  class:errored={isError}
+  class:running={tc.status === 'running'}
+  style:--tool-color={badge.color}
+  role="region"
+  aria-label="{tc.name} tool call"
+>
   <button class="tool-header" onclick={toggle} aria-expanded={expanded}>
-    <div class="tool-status-dot" class:running={tc.status === 'running'} class:done={tc.status === 'done'} class:error={tc.status === 'error'}></div>
+    <span class="tool-glyph" aria-hidden="true">
+      <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+        <path d={badge.glyph} stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </span>
+    <span class="tool-status-dot" class:running={tc.status === 'running'} class:done={tc.status === 'done'} class:error={tc.status === 'error'}></span>
     <span class="tool-name">{tc.name}</span>
     {#if headerSummary}
       <span class="tool-summary">{headerSummary}</span>
@@ -365,7 +368,7 @@
 <style>
   .tool-block {
     border: none;
-    border-left: 2px solid var(--border2);
+    border-left: 2px solid color-mix(in srgb, var(--tool-color, var(--border2)) 45%, transparent);
     border-radius: 0;
     overflow: hidden;
     background: transparent;
@@ -374,13 +377,37 @@
     margin-left: -2px;
     transition: border-color 0.15s ease, background 0.15s ease;
   }
-  .tool-block:hover { border-left-color: var(--accent-soft); }
-  .tool-block.expanded { border-left-color: var(--accent); }
+  .tool-block:hover { border-left-color: var(--tool-color, var(--accent-soft)); }
+  .tool-block.expanded { border-left-color: var(--tool-color, var(--accent)); }
   .tool-block.errored {
     border-left-color: var(--red);
     background: color-mix(in srgb, var(--red) 6%, transparent);
   }
-  .tool-block.errored .tool-name { color: var(--red); }
+  .tool-block.errored .tool-name,
+  .tool-block.errored .tool-glyph { color: var(--red); }
+
+  .tool-glyph {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+    color: var(--tool-color, var(--muted));
+    background: color-mix(in srgb, var(--tool-color, var(--muted)) 10%, transparent);
+    border-radius: 4px;
+    transition: background 0.15s ease, color 0.15s ease;
+  }
+  .tool-block.expanded .tool-glyph {
+    background: color-mix(in srgb, var(--tool-color, var(--accent)) 18%, transparent);
+  }
+  .tool-block.running .tool-glyph {
+    animation: tool-glyph-pulse 1.8s ease-in-out infinite;
+  }
+  @keyframes tool-glyph-pulse {
+    0%, 100% { opacity: 0.75; }
+    50% { opacity: 1; }
+  }
 
   .tool-header {
     padding: 6px 4px;

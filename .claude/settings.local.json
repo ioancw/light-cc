@@ -72,7 +72,7 @@
       "Bash(mv \"C:\\\\Users\\\\ioanc\\\\.claude\\\\plans\\\\bright-folding-meadow.md.tmp\" \"C:\\\\Users\\\\ioanc\\\\.claude\\\\plans\\\\bright-folding-meadow.md\")",
       "Bash(echo \"\")",
       "Bash(echo \"---\")",
-      "Bash(echo \"- **P1/P2/P3 complete \\(2026-04-19\\):** toasts on user-initiated API errors + non-spammy logging for background fetches; WS reconnect banner with countdown; InputBar disabled while conversation loads; hover actions forced visible on touch devices; Settings focus trap + Escape close + focus return; aria-busy on auth submit; Toast role/aria-live/aria-label; live OS theme following when no pinned choice; ToolCall red on \\\\`is_error\\\\`/\\\\`status=error\\\\`; plotly \\\\`console.error\\\\` guarded by \\\\`import.meta.env.DEV\\\\`; hardcoded \\\\\"Wiggy\\\\\" centralized in \\\\`frontend/src/brand.js\\\\` \\(VITE_BRAND_NAME override\\), used by Auth/Sidebar/MessageBubble. \\\\`npm run build\\\\` green.\")"
+      "Read(//tmp/**)"
     ]
   }
 }

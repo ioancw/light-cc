@@ -88,12 +88,23 @@ async def broadcast(cid: str, event_type: str, data: dict[str, Any]) -> None:
     subs = _subscribers.get(cid)
     if not subs:
         return
+    dead: list[RawSend] = []
     for send_fn in list(subs):
         try:
             await send_fn(event_type, data, cid)
         except Exception:
             # A dead subscriber shouldn't break delivery to the rest.
+            # Collect for removal so the set doesn't grow unbounded with
+            # disconnected WS clients.
             logger.debug("broadcast send failed for cid=%s", cid, exc_info=True)
+            dead.append(send_fn)
+    if dead:
+        live = _subscribers.get(cid)
+        if live is not None:
+            for send_fn in dead:
+                live.discard(send_fn)
+            if not live:
+                _subscribers.pop(cid, None)
 
 
 # ── Permission futures ───────────────────────────────────────────────

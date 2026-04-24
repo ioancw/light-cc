@@ -3,6 +3,60 @@
 
 import { SvelteSet } from 'svelte/reactivity';
 
+/**
+ * @typedef {Object} ToolCall
+ * @property {string} id
+ * @property {string} name
+ * @property {object} input
+ * @property {string} [description]
+ * @property {*} result
+ * @property {'running'|'done'|'error'} status
+ * @property {boolean} [is_error]
+ * @property {number} [startTime]
+ * @property {string} [duration]
+ * @property {string} [streamBuffer]
+ * @property {Array<{mime:string,data:string,name:string}>} [images]
+ * @property {string[]} [tables]
+ * @property {{title:string,plotlyJson:string}} [chart]
+ * @property {{title:string,spec:object}} [d3Chart]
+ * @property {Array<{name:string,html:string}>} [embeds]
+ */
+
+/**
+ * @typedef {Object} Message
+ * @property {'user'|'assistant'} role
+ * @property {string} content
+ * @property {string} id
+ * @property {ToolCall[]} toolCalls
+ * @property {boolean} streaming
+ * @property {number} [timestamp]
+ * @property {string} [model]
+ */
+
+/**
+ * @typedef {Object} Conversation
+ * @property {string} id             Local id (conv_* or srv_*)
+ * @property {string|null} serverId  Persisted backend id, assigned after first turn
+ * @property {string} title
+ * @property {Message[]} messages
+ * @property {number} createdAt
+ * @property {number} [updatedAt]
+ * @property {boolean} titleGenerated
+ * @property {boolean} [pinned]
+ * @property {boolean} [stub]        True until hydrated from the server
+ * @property {string} [forkedFrom]
+ * @property {number} totalTokens
+ * @property {string} [model]
+ */
+
+/**
+ * @typedef {Object} PendingPermission
+ * @property {string} cid
+ * @property {string} requestId
+ * @property {string} toolName
+ * @property {string} summary
+ */
+
 export const appState = $state({
   // Auth
   authToken: localStorage.getItem('lcc_access_token') || null,
@@ -78,31 +132,40 @@ if (typeof window !== 'undefined') {
 
 // Svelte 5 does not allow exporting $derived from modules.
 // Export getter functions instead -- components use these reactively.
+
+/** @returns {boolean} */
 export function isAuthenticated() {
   return !!appState.authToken;
 }
 
+/** @returns {Conversation|null} */
 export function currentConversation() {
   return appState.currentId ? appState.conversations[appState.currentId] : null;
 }
 
+/** @returns {boolean} */
 export function isCurrentStreaming() {
   const conv = currentConversation();
   return conv ? conv.messages.some(m => m.streaming) : false;
 }
 
+/** @returns {boolean} */
 export function isAnyStreaming() {
   return Object.values(appState.conversations).some(
     conv => conv.messages.some(m => m.streaming)
   );
 }
 
+/** @returns {Conversation[]} Conversations ordered by most recent activity first. */
 export function sortedConversations() {
   return Object.values(appState.conversations)
     .sort((a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0));
 }
 
-// Helpers to persist auth state
+/**
+ * Persist auth tokens to localStorage and push into reactive state.
+ * @param {{access_token:string, refresh_token:string, user:object}} data
+ */
 export function setAuth(data) {
   appState.authToken = data.access_token;
   appState.refreshToken = data.refresh_token;
@@ -112,6 +175,7 @@ export function setAuth(data) {
   localStorage.setItem('lcc_user', JSON.stringify(data.user));
 }
 
+/** Wipe auth tokens from state and localStorage. */
 export function clearAuth() {
   appState.authToken = null;
   appState.refreshToken = null;
@@ -121,7 +185,10 @@ export function clearAuth() {
   localStorage.removeItem('lcc_user');
 }
 
-// Conversation helpers
+/**
+ * Create a fresh local conversation and switch to it.
+ * @returns {string} local id of the new conversation
+ */
 export function newConversation() {
   const id = 'conv_' + Date.now();
   appState.conversations[id] = {
@@ -140,12 +207,18 @@ export function newConversation() {
   return id;
 }
 
+/** @param {string} id */
 export function switchConversation(id) {
   appState.currentId = id;
   appState.totalTokens = 0;
 }
 
-// Toast helper
+/**
+ * Push a toast notification; auto-clears after `duration` ms.
+ * @param {string} message
+ * @param {'info'|'success'|'error'} [type]
+ * @param {number} [duration]
+ */
 export function showToast(message, type = 'info', duration = 2500) {
   const id = 'toast_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
   appState.toasts.push({ id, message, type });
@@ -154,20 +227,32 @@ export function showToast(message, type = 'info', duration = 2500) {
   }, duration);
 }
 
-// Per-conversation permission helpers
+/**
+ * @param {string} cid
+ * @param {PendingPermission} perm
+ */
 export function setPendingPermission(cid, perm) {
   appState.pendingPermissions[cid] = perm;
 }
 
+/** @param {string} cid */
 export function clearPendingPermission(cid) {
   delete appState.pendingPermissions[cid];
 }
 
+/**
+ * @param {string} cid
+ * @returns {PendingPermission|null}
+ */
 export function getPendingPermission(cid) {
   return appState.pendingPermissions[cid] || null;
 }
 
-// Backward-compat: pendingPermission for the current conversation
+/**
+ * Permission request for the current conversation, checked under both its
+ * local id and its serverId (the server may address either).
+ * @returns {PendingPermission|null}
+ */
 export function pendingPermission() {
   const id = appState.currentId;
   if (!id) return null;
@@ -176,10 +261,15 @@ export function pendingPermission() {
   return appState.pendingPermissions[id] || (serverId && appState.pendingPermissions[serverId]) || null;
 }
 
+/** @param {string} cid */
 export function isConversationLoading(cid) {
   return cid && appState.loadingConversations.has(cid);
 }
 
+/**
+ * @param {string|null} [convId] Defaults to the current conversation.
+ * @returns {Message|undefined}
+ */
 export function getStreamingMessage(convId = null) {
   const conv = convId ? appState.conversations[convId] : appState.conversations[appState.currentId];
   if (!conv) return null;

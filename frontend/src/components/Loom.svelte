@@ -3,6 +3,7 @@
   import { appState, newConversation, currentConversation, viewport } from '../state.svelte.js';
   import { connect, disconnect, send } from '../ws.js';
   import { modelLabel, modelShortLabel } from '../lib/utils.js';
+  import { clickOutside } from '../lib/clickOutside.js';
   import Sidebar from './Sidebar.svelte';
   import ChatArea from './ChatArea.svelte';
   import InputBar from './InputBar.svelte';
@@ -21,29 +22,14 @@
 
   // Custom model dropdown
   let modelDropdownOpen = $state(false);
-  let modelDropdownEl = $state(null);
 
   // Mobile overflow menu (consolidates the four panel-toggle buttons)
   let overflowMenuOpen = $state(false);
-  let overflowMenuEl = $state(null);
 
   function openPanel(fn) {
     overflowMenuOpen = false;
     fn?.();
   }
-
-  function onClickOutsideOverflow(e) {
-    if (overflowMenuEl && !overflowMenuEl.contains(e.target)) {
-      overflowMenuOpen = false;
-    }
-  }
-
-  $effect(() => {
-    if (overflowMenuOpen) {
-      document.addEventListener('click', onClickOutsideOverflow, true);
-      return () => document.removeEventListener('click', onClickOutsideOverflow, true);
-    }
-  });
 
   onMount(() => {
     newConversation();
@@ -103,19 +89,6 @@
   function toggleModelDropdown() {
     modelDropdownOpen = !modelDropdownOpen;
   }
-
-  function onClickOutsideModel(e) {
-    if (modelDropdownEl && !modelDropdownEl.contains(e.target)) {
-      modelDropdownOpen = false;
-    }
-  }
-
-  $effect(() => {
-    if (modelDropdownOpen) {
-      document.addEventListener('click', onClickOutsideModel, true);
-      return () => document.removeEventListener('click', onClickOutsideModel, true);
-    }
-  });
 
   let topbarTitle = $derived(currentConversation()?.title || 'New conversation');
 
@@ -183,7 +156,7 @@
           </button>
         </div>
 
-        <div class="overflow-menu" bind:this={overflowMenuEl}>
+        <div class="overflow-menu" use:clickOutside={() => overflowMenuOpen = false}>
           <button
             class="topbar-btn overflow-trigger"
             onclick={() => overflowMenuOpen = !overflowMenuOpen}
@@ -205,7 +178,7 @@
             </div>
           {/if}
         </div>
-        <div class="model-dropdown" bind:this={modelDropdownEl}>
+        <div class="model-dropdown" use:clickOutside={() => modelDropdownOpen = false}>
           <button class="model-trigger" onclick={toggleModelDropdown} class:open={modelDropdownOpen} aria-label="Model: {modelLabel(appState.currentModel) || 'Model'}">
             <span class="model-label-long">{modelLabel(appState.currentModel) || 'Model'}</span>
             <span class="model-label-short">{modelShortLabel(appState.currentModel) || 'M'}</span>

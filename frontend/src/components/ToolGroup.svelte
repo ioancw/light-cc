@@ -1,8 +1,10 @@
 <script>
   import ToolCall from './ToolCall.svelte';
+  import { getToolBadge } from '../lib/toolBadge.js';
 
   let { name, calls } = $props();
   let expanded = $state(false);
+  let badge = $derived(getToolBadge(name));
 
   let aggStatus = $derived.by(() => {
     if (calls.some(c => c.status === 'error')) return 'error';
@@ -25,9 +27,21 @@
   });
 </script>
 
-<div class="tool-group" class:expanded role="region" aria-label="Grouped {name} calls">
+<div
+  class="tool-group tool-cat-{badge.cls}"
+  class:expanded
+  class:errored={aggStatus === 'error'}
+  style:--tool-color={badge.color}
+  role="region"
+  aria-label="Grouped {name} calls"
+>
   <button class="tg-header" onclick={() => expanded = !expanded} aria-expanded={expanded}>
-    <div class="tg-dot" class:running={aggStatus === 'running'} class:done={aggStatus === 'done'} class:error={aggStatus === 'error'}></div>
+    <span class="tg-glyph" class:running={aggStatus === 'running'} aria-hidden="true">
+      <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+        <path d={badge.glyph} stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </span>
+    <span class="tg-dot" class:running={aggStatus === 'running'} class:done={aggStatus === 'done'} class:error={aggStatus === 'error'}></span>
     <span class="tg-name">{name}</span>
     <span class="tg-count">× {calls.length}</span>
     <span class="tg-preview" class:error={errorCount > 0}>{previewText}</span>
@@ -50,14 +64,37 @@
 
 <style>
   .tool-group {
-    border-left: 2px solid var(--border2);
+    border-left: 2px solid color-mix(in srgb, var(--tool-color, var(--border2)) 45%, transparent);
     padding-left: 8px;
     margin-left: -2px;
     transition: border-color 0.15s ease;
     font-family: var(--font-mono);
   }
-  .tool-group:hover { border-left-color: var(--accent-soft); }
-  .tool-group.expanded { border-left-color: var(--accent); }
+  .tool-group:hover { border-left-color: var(--tool-color, var(--accent-soft)); }
+  .tool-group.expanded { border-left-color: var(--tool-color, var(--accent)); }
+  .tool-group.errored { border-left-color: var(--red); }
+
+  .tg-glyph {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+    color: var(--tool-color, var(--muted));
+    background: color-mix(in srgb, var(--tool-color, var(--muted)) 10%, transparent);
+    border-radius: 4px;
+    transition: background 0.15s ease;
+  }
+  .tool-group.expanded .tg-glyph {
+    background: color-mix(in srgb, var(--tool-color, var(--accent)) 18%, transparent);
+  }
+  .tg-glyph.running { animation: tg-glyph-pulse 1.8s ease-in-out infinite; }
+  @keyframes tg-glyph-pulse {
+    0%, 100% { opacity: 0.75; }
+    50% { opacity: 1; }
+  }
+  .tool-group.errored .tg-glyph { color: var(--red); }
 
   .tg-header {
     padding: 6px 4px;
@@ -135,7 +172,7 @@
 
   .tg-body {
     padding: 2px 0 2px 10px;
-    border-left: 1px dashed var(--border2);
+    border-left: 1px dashed color-mix(in srgb, var(--tool-color, var(--border2)) 50%, transparent);
     margin-left: 2px;
     margin-top: 4px;
     animation: tg-expand 0.18s ease;

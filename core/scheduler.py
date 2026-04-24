@@ -347,6 +347,13 @@ async def _scheduler_loop() -> None:
                 for sched in due:
                     logger.info(f"Firing scheduled task: {sched.name} (id={sched.id})")
 
+                    # Atomic: advance next_run_at + enqueue job in a single
+                    # transaction. If enqueue raises, roll back so the schedule
+                    # stays due and fires again next tick. A prior version
+                    # enqueued first and committed after, which left the job
+                    # orphaned on DB failure.
+                    previous_next_run = sched.next_run_at
+                    sched.next_run_at = _compute_next_run(sched.cron_expression, now, sched.user_timezone)
                     try:
                         from core.job_queue import enqueue
                         await enqueue(
@@ -358,13 +365,15 @@ async def _scheduler_loop() -> None:
                             cron_expression=sched.cron_expression,
                             user_timezone=sched.user_timezone or "UTC",
                         )
+                        await db.commit()
                     except Exception as e:
                         logger.error(f"Failed to enqueue scheduled task '{sched.name}': {e}")
+                        sched.next_run_at = previous_next_run
+                        try:
+                            await db.rollback()
+                        except Exception:
+                            logger.debug("rollback after enqueue failure raised", exc_info=True)
                         continue
-
-                    # Advance next_run_at only after successful enqueue
-                    sched.next_run_at = _compute_next_run(sched.cron_expression, now, sched.user_timezone)
-                    await db.commit()
         except Exception as e:
             logger.error(f"Scheduler loop error: {e}")
 
